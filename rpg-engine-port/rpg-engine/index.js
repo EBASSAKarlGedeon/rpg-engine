@@ -96,7 +96,20 @@
     document.body.appendChild(b);
   }
 
+  function ensureStyles() {
+    // Loreweaver/ST only loads the manifest CSS of top-level extension folders, so this
+    // nested port's style.css is never linked automatically. Inject it ourselves so the
+    // overlay + launcher are styled wherever this wrapper runs.
+    if (document.getElementById("rpge-style")) return;
+    const link = document.createElement("link");
+    link.id = "rpge-style";
+    link.rel = "stylesheet";
+    link.href = BASE + "style.css";
+    document.head.appendChild(link);
+  }
+
   function init() {
+    ensureStyles();
     addLauncher();
     // Preload the game iframe while hidden, so the first "Open RPG Engine" is instant
     // (same renderer page just sits idle). Deferred so Loreweaver's own startup is
