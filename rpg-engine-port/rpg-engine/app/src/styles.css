@@ -862,6 +862,13 @@
   .npc-edit { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 11px; padding: 0 2px; opacity: 0; pointer-events: none; transition: opacity .15s; }
   .npc-field:hover .npc-edit, .npc-field:focus-within .npc-edit { opacity: 1; pointer-events: auto; }
   .npc-edit:hover { color: var(--accent); }
+  /* OP ✎ edit mode toggle on the hero panel: always visible (it toggles the whole edit mode,
+    not a single field), gold-tinted while the mode is on. */
+  .hero-freeedit { opacity: 1; pointer-events: auto; margin-left: 2px; }
+  .hero-freeedit.on { color: var(--accent); }
+  /* OP ✎ tracker editor block inside the Stats tab: reuses the wizard's cc-trkrow rows. */
+  .hero-trk-edit { margin: 12px 0 4px; padding-top: 8px; border-top: 1px dashed var(--border); }
+  .hero-trk-edit .cc-rev-sec { margin-top: 0; }
 
   /* Per-NPC tracked values (README §6.3.1) — the hero's `.trk` markup, one full-width row per
      def. Rendered in the NPC profile popup only (the catalogue rows stay name + portrait). */
@@ -2502,6 +2509,11 @@
   .cc-hint { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin: 2px 0 12px; }
   .cc-hint b { color: var(--text); }
   .cc-hint .cc-ver { font-size: 11px; letter-spacing: 1px; color: var(--muted); white-space: nowrap; }
+  /* Free-build (OP) toggle on the wizard's stats step: a checkbox row styled like the hint text,
+     turned slightly brighter so it reads as the step's headline option rather than fine print. */
+  .cc-freebuild { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.55; margin: 2px 0 10px; cursor: pointer; color: var(--text); }
+  .cc-freebuild input { margin-top: 2px; accent-color: var(--ok, #7fbf7f); }
+  .cc-freebuild .dim { color: var(--muted); }
   /* The daily allowance line that closes the publish panels: a small muted footer inside the panel
      body (a block-level span, because the body is a <p>), ruled off from the explanation above it.
      When the allowance is spent it turns warning-coloured and the panel's action button is gone —
@@ -2553,6 +2565,18 @@
   .cc-rev-warn { color: #e0b25c; font-size: 12px; line-height: 1.5; margin-top: 10px; }
   .cc-ptrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
   .cc-ptbtns { display: flex; gap: 8px; }
+  /* Trackers step (OP-MC): one row per number tracker — name, Start/Max inputs, mode select. */
+  .cc-trks { display: flex; flex-direction: column; }
+  .cc-trkrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .cc-trkrow:last-child { border-bottom: 0; }
+  .cc-trk-name { font-size: 13px; }
+  .cc-trk-ctrl { display: flex; align-items: center; gap: 8px; }
+  .cc-trk-lbl { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+  .cc-trk-lbl input { width: 62px; height: 28px; background: var(--panel2); border: 1px solid var(--border); color: var(--text); padding: 0 6px; font: inherit; font-size: 12px; border-radius: 2px; }
+  .cc-trk-lbl input:disabled { opacity: .45; }
+  .cc-trk-mode { height: 28px; background: var(--panel2); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 12px; border-radius: 2px; }
+  /* Review step: the no-critical-failure checkbox line, indented like the powers textarea above. */
+  .cc-rev-opt { margin: 10px 0 4px; }
   /* AI-generate direction box (Bio step): same inline pattern as the world editor's
      NPC generator — a ruled card holding the direction field plus a run row. */
   .cc-genwrap { margin: 0 0 14px; padding: 10px 12px; background: var(--panel2); border: 1px solid var(--border); border-radius: 2px; }

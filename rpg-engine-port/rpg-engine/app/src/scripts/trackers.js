@@ -611,7 +611,9 @@ function trackerLines(defs, current, stats) {
 // No key, icon, or type; label falls back to key when empty. Max shown when present.
 // The GM sees `effects` ONLY — never `rules` (mutation instructions are tracker-call-only).
 // The tail is omitted entirely when `effects` is empty.
-function trackerValueLines(defs, current, stats) {
+// OP-MC: `modes` (see applyTrackerModes) annotates locked/unlimited trackers so the GM's
+// narration stays consistent with them.
+function trackerValueLines(defs, current, stats, modes) {
   const cur = current || {};
   const val = (d) => (d.type === "number" ? (cur[d.key] ?? 0) : (cur[d.key] ?? ""));
   const curMax = (d) => liveMax(d, cur, stats);
@@ -619,20 +621,48 @@ function trackerValueLines(defs, current, stats) {
     const name = (d.label && String(d.label).trim()) || d.key;
     const m = curMax(d);
     const maxTxt = m !== undefined ? ` (max ${m})` : "";
+    const mode = modes && modes[d.key];
+    const modeTxt = mode === "locked" ? " — LOCKED: this value never changes (the player set it; ignore what the story does to it)"
+      : mode === "unlimited" ? " — UNLIMITED: never depletes, always at its max (losses don't apply to it)"
+      : "";
     const e = String((d && d.effects) || "").trim();
-    return e ? `- ${name}${maxTxt}: ${val(d)} — ${e}` : `- ${name}${maxTxt}: ${val(d)}`;
+    return e ? `- ${name}${maxTxt}: ${val(d)} — ${e}${modeTxt}` : `- ${name}${maxTxt}: ${val(d)}${modeTxt}`;
   });
+}
+
+// OP-MC per-tracker modes, applied to the tracker call's parsed snapshot AFTER the fact — the
+// AI writes its block freely and the engine pins the player-protected values back. `locked` =
+// the value is frozen at the PRE-TURN value (`current`): once locked it never moves, since every
+// turn restores the previous snapshot. `unlimited` = never depletes: number trackers re-fill to
+// their LIVE max (a formula cap keeps working; the player can still edit the value by hand via
+// the Hero panel between turns); non-number trackers are frozen like locked (no sensible
+// "always full" meaning for text). Tombstoned max entries (`.max`) are left alone in both modes.
+export function applyTrackerModes(snap, defs, modes, current, stats) {
+  if (!modes || typeof modes !== "object") return snap || {};
+  const out = { ...(snap || {}) };
+  for (const d of defs || []) {
+    if (!d || !d.key) continue;
+    const mode = modes[d.key];
+    if (mode !== "locked" && mode !== "unlimited") continue;
+    if (d.type === "number" && mode === "unlimited") {
+      const m = liveMax(d, out, stats);
+      if (m !== undefined) out[d.key] = Math.max(0, Math.round(m));
+    } else if (current && current[d.key] !== undefined) {
+      out[d.key] = current[d.key];
+    }
+  }
+  return out;
 }
 
 // The TRACKED STATE section for the NARRATIVE context: current values + what they mean.
 // The GM reads these so the story stays consistent with the UI, and is told it never
 // changes/outputs the values — that's the dedicated tracker-update call's job (see
 // RPEngine.updateTrackers in rp-engine.js).
-export function buildTrackerValuesContext(defs, current, stats) {
+export function buildTrackerValuesContext(defs, current, stats, modes) {
   if (!defs || !defs.length) return "";
   return [
     "TRACKED STATE (current values and what they mean in the story — keep your narration consistent with them. You never change/output these values in your reply.):",
-    ...trackerValueLines(defs, current, stats),
+    ...trackerValueLines(defs, current, stats, modes),
   ].join("\n");
 }
 
@@ -713,7 +743,7 @@ export function questDirective(defs, current) {
 // done): current values + effects + rules + the exact machine format the block must be output in.
 // Each tracker's text first tells the call what the values mean (calibrate HOW MUCH to move),
 // then WHEN to change the value.
-export function buildTrackerContext(defs, current, stats) {
+export function buildTrackerContext(defs, current, stats, modes) {
   if (!defs || !defs.length) return "";
   const cur = current || {};
   const val = (d) => (d.type === "number" ? (cur[d.key] ?? 0) : (cur[d.key] ?? ""));
@@ -726,6 +756,15 @@ export function buildTrackerContext(defs, current, stats) {
   ];
   const directive = levelingDirective(defs, cur, stats);
   const quest = questDirective(defs, cur);
+  // OP-MC: per-tracker modes as hard instructions for the tracker call. The engine pins locked
+  // values back and re-fills unlimited ones after parsing (applyTrackerModes), but telling the
+  // call up front keeps its output self-consistent instead of fighting a silent correction.
+  const modeLines = modes ? (defs || []).map((d) => {
+    if (!d || !d.key) return "";
+    if (modes[d.key] === "locked") return `${d.key} is LOCKED — the player set this value; it must stay exactly as shown above no matter what the story does. Always output it unchanged.`;
+    if (modes[d.key] === "unlimited") return `${d.key} is UNLIMITED — it never depletes. Always output it at its max (${curMax(d) !== undefined ? curMax(d) : "as shown"}); losses in the story don't reduce it.`;
+    return "";
+  }).filter(Boolean) : [];
   return [
     "TRACKED STATE:",
     ...trackerLines(defs, current, stats),
@@ -734,7 +773,8 @@ export function buildTrackerContext(defs, current, stats) {
     example.join("\n"),
     "Rules: `[TRACKERS]` alone on its own line, then one line per tracker as `key: value` — no bullets, no bold, no quotes, no commentary. Output EVERY tracker every time. Values that didn't change stay as shown above. A change goes in ONLY when the latest turn describes something actually HAPPENING in it — not when it merely refers back to the past. Anything on the ALREADY APPLIED list is reflected in the current values, so a later mention of it is a recall: keep the value unchanged. Anything the latest turn describes that is NOT yet reflected in the current values is a genuine change: apply it. When in doubt, keep the value exactly as it is. A number may be written relative to its current value — `key: +N` adds N, `key: -N` subtracts N. For a tracker WITH a max, write `key: value/max` (e.g. `hp: 15/20`, `exp: 40/200`) and keep the max current even when unchanged — if the max itself changes this turn (level-up raising an exp cap, a curse lowering max HP), just write the new max. A tracker whose max is marked FIXED must keep the shown max. Trackers without a max are plain numbers (no /max, no commas, no units). Empty text values are written as `key:` with nothing after the colon.",
     directive,
-    quest
+    quest,
+    ...(modeLines.length ? ["PLAYER-SET TRACKER MODES (override the rules above):\n" + modeLines.join("\n")] : [])
   ].filter(Boolean).join("\n");
 }
 

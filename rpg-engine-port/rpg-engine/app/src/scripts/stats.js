@@ -156,8 +156,10 @@ export function dcForDifficulty(word, sides, rng) {
 // natural-20/natural-1 rule to any die: the top and bottom `max(1, floor(sides/20))` faces are
 // critical — i.e. the best achievable approximation of the d20's 5% windows (exactly 5% for a
 // d100, and exactly nat-20/nat-1 for a d20). Returns the full record used by the chat pip and the
-// GM's context. `stats` are the hero's current stat values.
-export function resolveCheck(decision, stats, defs, cfg) {
+// GM's context. `stats` are the hero's current stat values. `opts.noCritFail` (OP-MC hero toggle)
+// disables the critical-FAILURE window: the lowest rolls no longer auto-fail — the check is
+// decided by the math (total vs DC) whatever the die shows. Critical successes stay.
+export function resolveCheck(decision, stats, defs, cfg, opts = {}) {
   const stat = decision && decision.stat;
   const d = (defs || []).find((x) => x.key === stat);
   const statVal = stats && stats[stat] !== undefined ? Number(stats[stat]) : (d && d.start !== undefined ? d.start : 0);
@@ -168,7 +170,9 @@ export function resolveCheck(decision, stats, defs, cfg) {
   const critWindow = Math.max(1, Math.floor(sides / 20));
   const crit = die > sides - critWindow ? "pass" : die <= critWindow ? "fail" : null;
   const total = die + mod;
-  const passed = crit === "pass" ? true : crit === "fail" ? false : total >= dc;
+  // noCritFail only softens the FAILURE window — a crit success is pure upside, it stays.
+  const effCrit = (crit === "fail" && opts.noCritFail) ? null : crit;
+  const passed = effCrit === "pass" ? true : effCrit === "fail" ? false : total >= dc;
   return {
     stat,
     statLabel: (d && d.label) || stat,
@@ -180,7 +184,7 @@ export function resolveCheck(decision, stats, defs, cfg) {
     dc,
     difficulty: normalizeDifficulty(decision && decision.difficulty),
     passed,
-    crit,
+    crit: effCrit,
     margin: total - dc
   };
 }

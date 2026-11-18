@@ -1,7 +1,7 @@
 // The core GM engine: context construction, GM output parsing, narration + NPC split.
 
 import { characterSheet } from "./character.js";
-import { buildNpcTrackerContext, buildNpcTrackerRulesContext, extractNpcTrackers, extractTrackers, foldNpcTrackers, getCurrentNpcTrackers, getCurrentTrackers, initialNpcTrackers, lifeTracker, levelTracker, expTracker, liveMax, locationValue, npcTrackerValuesLine, npcEnabledKeysFromFlags, stripDisabledNpcTrackerKeys, NPC_TRACKER_CAP, LIFE_TRACKER_LOOKBACK_TURNS, LIFE_TRACKER_OFFSCREEN_CAP, LIFE_TRACKER_EVENTS_PER_NPC, parseNpcTrackerBlock, parseTrackerBlock, buildTrackerContext, buildTrackerValuesContext, heroTrackerOutputCap, npcTrackerOutputCap, applyLevelUpBackstop, findTrackerLeakStart, stripTrackerLeak, TRACKER_LEAK_STOPS } from "./trackers.js";
+import { buildNpcTrackerContext, buildNpcTrackerRulesContext, extractNpcTrackers, extractTrackers, foldNpcTrackers, getCurrentNpcTrackers, getCurrentTrackers, initialNpcTrackers, lifeTracker, levelTracker, expTracker, liveMax, locationValue, npcTrackerValuesLine, npcEnabledKeysFromFlags, stripDisabledNpcTrackerKeys, NPC_TRACKER_CAP, LIFE_TRACKER_LOOKBACK_TURNS, LIFE_TRACKER_OFFSCREEN_CAP, LIFE_TRACKER_EVENTS_PER_NPC, parseNpcTrackerBlock, parseTrackerBlock, buildTrackerContext, buildTrackerValuesContext, heroTrackerOutputCap, npcTrackerOutputCap, applyLevelUpBackstop, applyTrackerModes, findTrackerLeakStart, stripTrackerLeak, TRACKER_LEAK_STOPS } from "./trackers.js";
 import { buildStatsContext } from "./stats.js";
 import { formatDistance, compassDir, normalizeLoc, mapScale } from "./map-system.js";
 import { loreForTurn, LORE_FEED_CAP, LORE_FEED_MAX_CHARS, DEFAULT_TRIGGER_WINDOW_TURNS, STOPWORDS, nameHit } from "./lorebook.js";
@@ -770,7 +770,7 @@ export class RPEngine {
     // change most turns, so the prefix cache breaks here — everything below recomputes;
     // that is the price of the hero-first flow, and the stable prefix above stays banked.
     if (this.trackerDefs.length) {
-      parts.push(buildTrackerValuesContext(this.trackerDefs, getCurrentTrackers(state, this.trackerDefs), (state.character && state.character.stats) || {}));
+      parts.push(buildTrackerValuesContext(this.trackerDefs, getCurrentTrackers(state, this.trackerDefs), (state.character && state.character.stats) || {}, state.character && state.character.trackerModes));
     }
 
     // The lorebook: only the entries relevant to the current scene are fed — "always"
@@ -1664,7 +1664,7 @@ export class RPEngine {
       : "  (none — the previous turn changed no tracked value)";
     const instruction = [
       "You are the game-state tracker for a text RPG. The tracked values below are the state AFTER the previous story turn, exactly as the tracker recorded it — they are the ground truth to build on, not a perfect guarantee. Your job is to output the state AFTER the LATEST turn: apply what the latest turn genuinely changes, keep everything else exactly as-is, and keep every value consistent with the narration.",
-      buildTrackerContext(this.trackerDefs, current, heroStats),
+      buildTrackerContext(this.trackerDefs, current, heroStats, (state.character && state.character.trackerModes) || null),
       prevText ? "PREVIOUS STORY TURN (already handled — for reference only):\n" + prevText : "(this is the very first turn — there is no previous turn)",
       "CHANGES THE TRACKER ALREADY APPLIED (already reflected in the values above — do NOT apply them again):\n" + appliedTxt,
       actionText ? "The player's action/directive this turn: " + actionText : "",
@@ -1682,7 +1682,10 @@ export class RPEngine {
       return current;
     }
     const { block } = extractTrackers(out);
-    const snap = block ? parseTrackerBlock(block, this.trackerDefs, current, heroStats) : current;
+    const snap0 = block ? parseTrackerBlock(block, this.trackerDefs, current, heroStats) : current;
+    // OP-MC: pin locked trackers back / re-fill unlimited ones after the call's parse, so the
+    // player's modes win over whatever the tracker wrote.
+    const snap = applyTrackerModes(snap0, this.trackerDefs, (state.character && state.character.trackerModes) || null, current, heroStats);
     // Backstop: if the tracker call left exp pinned at its cap without applying the level-up,
     // enforceLevelUp fixes the pair deterministically (pure arithmetic, no extra call). The
     // read-only token estimator passes levelUpBackstop:false so it never even runs the check.

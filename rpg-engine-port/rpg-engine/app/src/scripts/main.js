@@ -5,7 +5,7 @@ import { NpcLifeSystem, NPC_LIFE_EVERY_TURNS, NPC_LIFE_MAX_PER_TICK, NPC_LIFE_MI
 import { NpcSystem, mergePersona, npcLinkRuleFor } from "./npc-system.js";
 import { RPEngine } from "./rp-engine.js";
 import { defaultCharacter } from "./character.js";
-import { initialTrackers, getCurrentTrackers as deriveCurrentTrackers, parseTrackerBlock, extractTrackers, stripBlockForDisplay, groupByRow, liveMax, isDead, lifeTracker, levelTracker, expTracker, locationTracker, locationValue, isQuestTrackerDef, foldNpcTrackers, initialNpcTrackers, npcEnabledKeysFromFlags, npcTriggerMatches, npcTriggerSubject, stripDisabledNpcTrackerKeys, purgeNpcTrackerKeys, purgeNpcTrackerHistory, extractNpcTrackers, parseNpcTrackerBlock, npcTrackerBlockText, applyLevelUpBackstop, applyTrackerStartOverrides } from "./trackers.js";
+import { initialTrackers, getCurrentTrackers as deriveCurrentTrackers, parseTrackerBlock, extractTrackers, stripBlockForDisplay, groupByRow, liveMax, isDead, lifeTracker, levelTracker, expTracker, locationTracker, locationValue, isQuestTrackerDef, foldNpcTrackers, initialNpcTrackers, npcEnabledKeysFromFlags, npcTriggerMatches, npcTriggerSubject, stripDisabledNpcTrackerKeys, purgeNpcTrackerKeys, purgeNpcTrackerHistory, extractNpcTrackers, parseNpcTrackerBlock, npcTrackerBlockText, applyLevelUpBackstop, applyTrackerModes, applyTrackerStartOverrides } from "./trackers.js";
 import { ensureStats, clampStat, statTier, checkMod, resolveCheck } from "./stats.js";
 import { loadWorld, emptyWorld, WorldStore, exportWorld, worldToFile, WORLD_EXTENSION, isNsfwMeta, isCommentsOffMeta, isRemixMeta, isImportedMeta, isReservedTag, NSFW_TAG, REMIX_TAG, MAX_AUTHOR_TAGS, getWorldStarts, getWorldStart } from "./world.js";
 import { tagChipsHtml, scheduleTagFit } from "./tag-row.js";
@@ -302,6 +302,31 @@ function initCharacterStats(c) {
     const init = initialTrackers(trackerDefs, c.stats);
     const lvlDef = levelTracker(trackerDefs);
     c.statsAwardedLevel = lvlDef && typeof init[lvlDef.key] === "number" ? init[lvlDef.key] : 1;
+  }
+  // OP-MC / free-build fields — tolerate anything an old/corrupt save carries; unknown keys
+  // (trackers the world no longer defines) are dropped so the GM context never invents one.
+  if (typeof c.freeBuild !== "boolean") c.freeBuild = false;
+  if (typeof c.noCritFail !== "boolean") c.noCritFail = false;
+  if (typeof c.freeEdit !== "boolean") c.freeEdit = false;
+  if (typeof c.powers !== "string") c.powers = "";
+  const defKeys = new Set((trackerDefs || []).map((d) => d && d.key).filter(Boolean));
+  if (!c.trackerOverrides || typeof c.trackerOverrides !== "object" || Array.isArray(c.trackerOverrides)) c.trackerOverrides = null;
+  else {
+    const ov = {};
+    for (const k of Object.keys(c.trackerOverrides)) {
+      const n = Number(c.trackerOverrides[k]);
+      const tk = k.endsWith(".max") ? k.slice(0, -4) : k;
+      if (Number.isFinite(n) && defKeys.has(tk)) ov[k] = Math.max(0, Math.round(n));
+    }
+    c.trackerOverrides = Object.keys(ov).length ? ov : null;
+  }
+  if (!c.trackerModes || typeof c.trackerModes !== "object" || Array.isArray(c.trackerModes)) c.trackerModes = null;
+  else {
+    const tm = {};
+    for (const k of Object.keys(c.trackerModes)) {
+      if (defKeys.has(k) && (c.trackerModes[k] === "locked" || c.trackerModes[k] === "unlimited")) tm[k] = c.trackerModes[k];
+    }
+    c.trackerModes = Object.keys(tm).length ? tm : null;
   }
   return c;
 }
@@ -6075,7 +6100,7 @@ async function runGmTurn({ history, actionText, opening = false, insertIndex = n
   ]);
   let check = null;
   if (decision) {
-    check = resolveCheck(decision, state.character.stats || {}, statDefs, statCfg);
+    check = resolveCheck(decision, state.character.stats || {}, statDefs, statCfg, { noCritFail: !!(state.character && state.character.noCritFail) });
     bubble.wrap.insertBefore(checkPipEl(check, { animate: true }), bubble.row);
   }
   // NPCs this reply introduces are registered as entries BEFORE the NPC tracker call (the callback
@@ -6410,6 +6435,33 @@ function currentTrackers() {
   return deriveCurrentTrackers(state, trackerDefs);
 }
 
+// OP ✎ edit mode: rewrite a tracker's value/max in the LATEST afterTrackers snapshot (or the
+// session's initial seed when no turn has a snapshot yet). Only the newest snapshot is touched —
+// older turns keep their historical state, and getCurrentTrackers reads the newest one, so the
+// next GM turn's context and the tracker strip pick the edit up immediately. Returns true when
+// a snapshot was found and updated.
+function applyManualTrackerEdit(key, val, max) {
+  const msgs = (state && state.messages) || [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m && m.afterTrackers && typeof m.afterTrackers === "object") {
+      const next = { ...m.afterTrackers };
+      if (val !== undefined) next[key] = val;
+      if (max !== undefined) next[key + ".max"] = max;
+      m.afterTrackers = next;
+      return true;
+    }
+  }
+  if (state) {
+    const next = { ...((state.initialTrackers) || {}) };
+    if (val !== undefined) next[key] = val;
+    if (max !== undefined) next[key + ".max"] = max;
+    state.initialTrackers = next;
+    return true;
+  }
+  return false;
+}
+
 // info-tip anchor for a tracker chip/row/bar: the whole element opens the shared bubble —
 // no icon is added (the chip's own `cursor: help` is the affordance). Hint-only: without a
 // world-written `hint` the bubble would just echo the visible label, so no hook is added.
@@ -6424,7 +6476,7 @@ function trkTip(d) {
 // max is the live one (`key.max`, may have been changed by the AI mid-game) falling back to the
 // config's static max. The whole chip opens the shared info-tip (`hint`, headed with the label);
 // `rules` is only for the AI. `color` (optional) overrides the bar fill color.
-function trackerChip(d, v, curMax) {
+function trackerChip(d, v, curMax, badge = "") {
   const [tc, ta] = trkTip(d);
   const label = d.label ? `<span class="trk-l">${esc(d.label.toUpperCase())}</span>` : "";
   const ic = d.icon ? `<span class="trk-ic">${esc(d.icon)}</span>` : "";
@@ -6433,7 +6485,7 @@ function trackerChip(d, v, curMax) {
     const pct = curMax > 0 ? Math.round((num / curMax) * 100) : 0;
     const fillStyle = `width:${pct}%` + (d.color ? `;background:${esc(d.color)}` : "");
     return `<div class="trk hp${tc}"${ta}>${ic}${label}<span class="trk-bar"><span class="trk-fill" style="${fillStyle}"></span></span>
-      <span class="trk-v">${num}/${curMax}</span></div>`;
+      <span class="trk-v">${num}/${curMax}${badge}</span></div>`;
   }
   const val = (v === undefined || v === null || v === "") ? (d.type === "number" ? "0" : "—") : (d.type === "number" ? String(Math.round(Number(v))) : String(v));
   return `<div class="trk${tc}"${ta}>${ic}${label}<span class="trk-v">${esc(val)}</span></div>`;
@@ -7202,7 +7254,7 @@ function saveGmFull(turn, full) {
     // the tag on empty completions (prev looks empty). Same basis the AI path uses.
     // An emptied tracker block means "leave values untouched" — keep this turn's own snapshot.
     const trackers = gmParts.block
-      ? parseTrackerBlock(gmParts.block, trackerDefs, prevSnap, heroStats)
+      ? applyTrackerModes(parseTrackerBlock(gmParts.block, trackerDefs, prevSnap, heroStats), trackerDefs, (state.character && state.character.trackerModes) || null, prevSnap, heroStats)
       : { ...((turn.parts[turn.parts.length - 1] && turn.parts[turn.parts.length - 1].afterTrackers) || prevSnap || {}) };
     // Level-up backstop, same as the AI path (see RPEngine.enforceLevelUp): a hand-edit that pins
     // exp at its cap without raising the level would otherwise leave the bar stuck full forever —
@@ -9804,6 +9856,10 @@ function normalize(d, opts) {
 // the label) — same convention as the tracker bar; `rules` is GM-only.
 function heroTrackerHtml(d, curTrk) {
   const curMax = liveMax(d, curTrk, (state.character && state.character.stats) || {});
+  // OP-MC mode badge: 🔒 locked / ∞ unlimited, so the strip itself tells the player which
+  // trackers are player-protected.
+  const mode = ((state.character && state.character.trackerModes) || {})[d.key];
+  const badge = mode === "locked" ? " 🔒" : mode === "unlimited" ? " ∞" : "";
   if (d.type === "number" && curMax) {
     const [tc, ta] = trkTip(d);
     const ic = d.icon ? `<span class="trk-ic">${esc(d.icon)}</span>` : "";
@@ -9811,9 +9867,9 @@ function heroTrackerHtml(d, curTrk) {
     const num = clampNum(curTrk[d.key], 0, 0, curMax);
     const pct = curMax > 0 ? Math.round((num / curMax) * 100) : 0;
     const fillStyle = `width:${pct}%` + (d.color ? `;background:${esc(d.color)}` : "");
-    return `<div class="trk hbar${tc}"${ta}>${ic}${label}<span class="trk-bar"><span class="trk-fill" style="${fillStyle}"></span></span><span class="trk-v">${num}/${curMax}</span></div>`;
+    return `<div class="trk hbar${tc}"${ta}>${ic}${label}<span class="trk-bar"><span class="trk-fill" style="${fillStyle}"></span></span><span class="trk-v">${num}/${curMax}${badge}</span></div>`;
   }
-  return trackerChip(d, curTrk[d.key], curMax);
+  return trackerChip(d, curTrk[d.key], curMax, badge);
 }
 
 // The Hero panel's tracker rows: the combined level+exp bar, then the remaining hero-shown
@@ -10353,6 +10409,7 @@ function openCharacterCreation(s, onDone, onCancel) {
           <div class="cc-avhist" id="ccAvHist" hidden></div>
         </div>
         <div class="cc-view" data-step="stats" hidden>
+          <label class="cc-freebuild" id="ccFreeBuildRow"><input type="checkbox" id="ccFreeBuild"><span>⚡ <b>Free build</b> — skip the point budget; raise stats as high as you like<span class="dim"> (OP characters)</span></span></label>
           <p class="cc-hint" id="ccStatsHint">Allocate <b>${ccBudget}</b> starting points across your stats. Reduce one stat (min ${ccFloor}${ccCeiling !== undefined ? `, max ${ccCeiling}` : ""}) to free points for another — nothing is final until you begin.</p>
           <div class="cc-ptrow" id="ccPtRow">
             <span class="cc-pts" id="ccPts"></span>
@@ -10362,6 +10419,10 @@ function openCharacterCreation(s, onDone, onCancel) {
             </span>
           </div>
           <div class="cc-stats" id="ccStats"></div>
+        </div>
+        <div class="cc-view" data-step="trackers" hidden>
+          <p class="cc-hint">Optional — tune your starting state. Set a tracker's starting value or cap, or mark it <b>Locked</b> (the story can never change it) or <b>Unlimited ∞</b> (never depletes, always at its cap). Leave everything as-is for a normal start.</p>
+          <div class="cc-trks" id="ccTrks"></div>
         </div>
         <div class="cc-view" data-step="review" hidden>
           <p class="cc-hint">Look your hero over before you begin. Anything can still be changed — jump back to a step, or begin when they're ready.</p>
@@ -10382,6 +10443,14 @@ function openCharacterCreation(s, onDone, onCancel) {
 
   const ccStats = { ...c.stats };
   let ccRemaining = ccBudget;
+  let ccFreeBuild = false; // stats step: ignore the point budget + ccCeiling (OP characters)
+  // Trackers step (OP-MC): per-tracker starting value/max overrides and locked/unlimited modes.
+  // Both mirror the shapes a world opening already uses (trackerOverrides / see applyTrackerStart
+  // Overrides); the hero's choices MERGE OVER the opening's own (hero wins).
+  let ccTrkOverrides = null; // {key: value, "key.max": n} — only entries the player actually touched
+  let ccTrkModes = null;     // {key: "locked"|"unlimited"} — only non-normal modes
+  let ccPowers = "";         // free-text "Powers & abilities" fed to the GM's character sheet
+  let ccNoCritFail = false;  // checks ignore the critical-failure window
   // Wizard steps: Bio/Avatar/Stats/Review always; Opening prepended when the world has >1 starts.
   // Tabs are clickable so the player can switch back and forth between the opening and the hero.
   let ccSteps = ["bio", "avatar", "stats", "review"];
@@ -10390,7 +10459,7 @@ function openCharacterCreation(s, onDone, onCancel) {
   let ccStartId = (s && s.startId) || null;
   // The player's own words when the custom opening is picked (see world.js `custom: true`).
   let ccCustomText = (s && s.customStartText) || "";
-  const wizardStepLabel = (id) => (id === "start" ? "Opening" : id === "bio" ? "Bio" : id === "avatar" ? "Avatar" : id === "stats" ? "Stats" : "Review");
+  const wizardStepLabel = (id) => (id === "start" ? "Opening" : id === "bio" ? "Bio" : id === "avatar" ? "Avatar" : id === "stats" ? "Stats" : id === "trackers" ? "Trackers" : "Review");
   function paintWizardTabs() {
     const tabsEl = overlay.querySelector(".ce-tabs");
     if (!tabsEl) return;
@@ -10416,10 +10485,10 @@ function openCharacterCreation(s, onDone, onCancel) {
     try {
       readBio();
       const bio = Object.fromEntries(CC_BIO_FIELDS.map(([k]) => [k, c[k] ?? ""]));
-      const touched = Object.values(bio).some((v) => (v || "").trim()) || ccIsImg(c.portrait) || ccRemaining !== ccBudget || !!ccStartId || !!String(ccCustomText || "").trim();
+      const touched = Object.values(bio).some((v) => (v || "").trim()) || ccIsImg(c.portrait) || ccRemaining !== ccBudget || ccFreeBuild || !!ccStartId || !!String(ccCustomText || "").trim() || !!ccTrkOverrides || !!ccTrkModes || !!String(ccPowers || "").trim() || ccNoCritFail;
       const f = ccDraftKv();
       if (!touched || !f) return;
-      f.set(ccDraftKey, { bio, portrait: c.portrait || "", ccStats: { ...ccStats }, ccRemaining, startId: ccStartId || null, customStartText: String(ccCustomText || ""), savedAt: Date.now() }).catch(() => {});
+      f.set(ccDraftKey, { bio, portrait: c.portrait || "", ccStats: { ...ccStats }, ccRemaining, ccFreeBuild, ccTrkOverrides, ccTrkModes, ccPowers, ccNoCritFail, startId: ccStartId || null, customStartText: String(ccCustomText || ""), savedAt: Date.now() }).catch(() => {});
     } catch (e) {}
   }
   function saveDraftSoon() { clearTimeout(ccDraftTimer); ccDraftTimer = setTimeout(saveDraft, 800); }
@@ -10437,6 +10506,11 @@ function openCharacterCreation(s, onDone, onCancel) {
       if (d.portrait) c.portrait = d.portrait;
       if (d.ccStats) for (const k of Object.keys(d.ccStats)) ccStats[k] = d.ccStats[k];
       if (typeof d.ccRemaining === "number") ccRemaining = Math.max(0, Math.min(d.ccRemaining, ccBudget));
+      if (typeof d.ccFreeBuild === "boolean") ccFreeBuild = d.ccFreeBuild;
+      if (d.ccTrkOverrides && typeof d.ccTrkOverrides === "object" && !Array.isArray(d.ccTrkOverrides)) ccTrkOverrides = { ...d.ccTrkOverrides };
+      if (d.ccTrkModes && typeof d.ccTrkModes === "object" && !Array.isArray(d.ccTrkModes)) ccTrkModes = { ...d.ccTrkModes };
+      if (typeof d.ccPowers === "string") ccPowers = d.ccPowers;
+      if (typeof d.ccNoCritFail === "boolean") ccNoCritFail = d.ccNoCritFail;
       if (typeof d.startId === "string" && d.startId.trim()) ccStartId = d.startId.trim();
       if (typeof d.customStartText === "string" && d.customStartText) { ccCustomText = d.customStartText; const cta = overlay.querySelector("#ccCustomText"); if (cta && !cta.value) cta.value = d.customStartText; }
       renderBio();
@@ -10488,7 +10562,7 @@ function openCharacterCreation(s, onDone, onCancel) {
     const filled = CC_BIO_FIELDS.filter(([k]) => ((c[k] || "").trim()));
     const warn = [];
     if (!((c.name || "").trim())) warn.push("Your hero has no name yet — add one in the Bio step.");
-    if (ccRemaining > 0 && statDefs.length) warn.push(`${ccRemaining} starting point${ccRemaining === 1 ? "" : "s"} still unspent — spend ${ccRemaining === 1 ? "it" : "them"} in Stats, or begin anyway.`);
+    if (!ccFreeBuild && ccRemaining > 0 && statDefs.length) warn.push(`${ccRemaining} starting point${ccRemaining === 1 ? "" : "s"} still unspent — spend ${ccRemaining === 1 ? "it" : "them"} in Stats, or begin anyway.`);
     const stats = statDefs.map((d) => {
       const v = Math.min(clampStat(ccStats[d.key] ?? d.start, d), ccHi(d));
       const mod = checkMod(v, statCfg);
@@ -10503,7 +10577,16 @@ function openCharacterCreation(s, onDone, onCancel) {
       ${revStart ? `<div class="cc-rev-sec">Opening</div><div class="cc-rev-row"><span>${esc(startLabelOf(revStart, ccStarts.indexOf(revStart)))}</span><span class="dim">${esc((revStart.custom === true ? (String(ccCustomText || "").trim().replace(/\s+/g, " ").slice(0, 140) || String(revStart.description || "").trim().replace(/\s+/g, " ").slice(0, 140)) : String(revStart.description || "").trim().replace(/\s+/g, " ").slice(0, 140)) || "No description given by the author.")}</span></div>` : ""}
       ${filled.length ? `<div class="cc-rev-sec">Bio</div>` + filled.map(([k, label]) => `<div class="cc-rev-row"><span>${esc(label)}</span><span>${esc(c[k])}</span></div>`).join("") : ""}
       ${statDefs.length ? `<div class="cc-rev-sec">Stats</div><div class="cc-rev-stats">${stats}</div>` : ""}
+      <div class="cc-rev-sec">Powers &amp; abilities</div>
+      <textarea class="popup-ta" id="ccPowers" rows="4" placeholder="Free text the GM always knows about your hero — innate powers, magic, skills, items… e.g. 'Regenerates 1 HP per turn. Can read minds by touching someone.'">${esc(ccPowers)}</textarea>
+      <label class="cc-freebuild cc-rev-opt"><input type="checkbox" id="ccNoCritFail"${ccNoCritFail ? " checked" : ""}><span><b>No critical failures</b> — the worst roll is decided by the math (total vs difficulty), never an auto-fail</span></label>
       ${warn.map((w) => `<div class="cc-rev-warn">⚠ ${esc(w)}</div>`).join("")}`;
+    // Powers/crit-fail inputs live inside the regenerated review HTML — sync on input so the
+    // values survive jumping back and forth between steps (readXxx is only called on entry).
+    const pw = overlay.querySelector("#ccPowers");
+    if (pw) pw.oninput = () => { ccPowers = pw.value; saveDraftSoon(); };
+    const ncf = overlay.querySelector("#ccNoCritFail");
+    if (ncf) ncf.onchange = () => { ccNoCritFail = !!ncf.checked; saveDraftSoon(); };
   }
 
   const showErr = (m) => { overlay.querySelector("#ccErr").textContent = m || ""; };
@@ -10519,7 +10602,11 @@ function openCharacterCreation(s, onDone, onCancel) {
   const valClass = (val) => statTier(val, { averageThreshold: statAvgT, exceptionalThreshold: statExcT });
   // Highest a starting stat may reach in the wizard: the stat's own `max` (when it has one) and
   // the world-wide creation ceiling (when the world sets one) — whichever is lower.
-  const ccHi = (d) => Math.min(d.max !== undefined ? d.max : Infinity, ccCeiling !== undefined ? ccCeiling : Infinity);
+  // Raise ceiling: with Free build the point budget and the world's ccCeiling are both ignored —
+  // a stat is capped only by its own world max, and a world with no per-stat max is unlimited.
+  const ccHi = (d) => (ccFreeBuild
+    ? (d.max !== undefined ? d.max : Infinity)
+    : Math.min(d.max !== undefined ? d.max : Infinity, ccCeiling !== undefined ? ccCeiling : Infinity));
 
   function renderStats() {
     const hasStats = statDefs.length > 0;
@@ -10529,6 +10616,9 @@ function openCharacterCreation(s, onDone, onCancel) {
       overlay.querySelector("#ccStats").innerHTML = `<div class="cc-empty">This world doesn't have any stats.<br>Your hero needs no attribute allocation — just begin your adventure.</div>`;
       return;
     }
+    // Free build rewrites the step's copy: no budget to spend, the ceiling is each stat's own max.
+    const hintEl = overlay.querySelector("#ccStatsHint");
+    if (ccFreeBuild) hintEl.innerHTML = `<b>Free build is on</b> — no points to spend; raise any stat as high as you like (a stat with no world max is unlimited). Nothing is final until you begin.`;
     const rows = statDefs.map((d) => {
       const val = Math.min(ccStats[d.key] ?? clampStat(c.stats[d.key], d), ccHi(d));
       const atMax = val >= ccHi(d);
@@ -10538,12 +10628,12 @@ function openCharacterCreation(s, onDone, onCancel) {
         <span class="stat-ctrl">
           <button type="button" class="mini stat-dec" data-k="${esc(d.key)}" ${atFloor ? "disabled" : ""} title="Reduce (refunds a point)">−</button>
           <span class="stat-val ${valClass(val)}">${val}</span>
-          <button type="button" class="mini ok stat-inc" data-k="${esc(d.key)}" ${(atMax || ccRemaining <= 0) ? "disabled" : ""} title="Increase (spends a point)">+</button>
+          <button type="button" class="mini ok stat-inc" data-k="${esc(d.key)}" ${(atMax || (!ccFreeBuild && ccRemaining <= 0)) ? "disabled" : ""} title="Increase (spends a point)">+</button>
         </span>
       </div>`;
     }).join("");
     overlay.querySelector("#ccStats").innerHTML = rows;
-    overlay.querySelector("#ccPts").innerHTML = `Points to spend: <b>${ccRemaining}</b>`;
+    overlay.querySelector("#ccPts").innerHTML = ccFreeBuild ? `Free build — no point budget` : `Points to spend: <b>${ccRemaining}</b>`;
     overlay.querySelectorAll("#ccStats .stat-inc").forEach((b) => (b.onclick = () => bump(b.dataset.k, +1)));
     overlay.querySelectorAll("#ccStats .stat-dec").forEach((b) => (b.onclick = () => bump(b.dataset.k, -1)));
     saveDraft();
@@ -10554,17 +10644,88 @@ function openCharacterCreation(s, onDone, onCancel) {
     if (!d) return;
     const cur = clampStat(ccStats[key], d);
     if (delta > 0) {
-      if (ccRemaining <= 0 || cur >= ccHi(d)) return;
+      if ((!ccFreeBuild && ccRemaining <= 0) || cur >= ccHi(d)) return;
       ccStats[key] = cur + 1;
-      ccRemaining--;
+      if (!ccFreeBuild) ccRemaining--;
     } else {
       if (cur <= ccFloor) return;
       ccStats[key] = cur - 1;
-      ccRemaining++;
+      if (!ccFreeBuild) ccRemaining++;
     }
     renderStats();
   }
 
+  // ---------- Trackers step (OP-MC) ----------
+  // Seeds are the same values a session would start with (initialTrackers against the hero's
+  // CURRENT wizard stats, so formula starts/caps stay coherent when stats change); the opening's
+  // own trackerOverrides ride on top of the seed, the player's edits on top of those (hero wins).
+  const trkSeed = () => {
+    const base = initialTrackers(trackerDefs, ensureStats(ccStats, statDefs)) || {};
+    const picked = ccStarts.length > 1 ? ccStarts.find((x) => x && x.id === ccStartId) || ccStarts[0] : ccStarts[0];
+    return applyTrackerStartOverrides(base, trackerDefs, (picked && picked.trackerOverrides) || null, ensureStats(ccStats, statDefs));
+  };
+  function renderTrackers() {
+    const defs = (trackerDefs || []).filter((d) => d && d.type === "number");
+    const box = overlay.querySelector("#ccTrks");
+    if (!box) return;
+    if (!defs.length) { box.innerHTML = `<div class="cc-empty">This world has no numeric trackers.</div>`; return; }
+    const seed = trkSeed();
+    const ovs = ccTrkOverrides || {};
+    const modes = ccTrkModes || {};
+    const rows = defs.map((d) => {
+      const name = (d.label && String(d.label).trim()) || d.key;
+      const seedVal = seed[d.key] ?? 0;
+      const seedMax = seed[d.key + ".max"] ?? liveMax(d, seed, ensureStats(ccStats, statDefs));
+      const v = ovs[d.key] !== undefined ? ovs[d.key] : seedVal;
+      const mx = ovs[d.key + ".max"] !== undefined ? ovs[d.key + ".max"] : seedMax;
+      const mode = modes[d.key] || "normal";
+      const hasMax = mx !== undefined && mx !== null;
+      return `<div class="cc-trkrow" data-k="${esc(d.key)}">
+        <span class="cc-trk-name"><b>${esc(name)}</b>${d.icon ? ` <span class="dim">${esc(d.icon)}</span>` : ""}</span>
+        <span class="cc-trk-ctrl">
+          <label class="cc-trk-lbl">Start <input type="number" class="cc-trk-val" value="${esc(v)}" ${mode === "unlimited" ? "disabled" : ""}></label>
+          <label class="cc-trk-lbl">Max <input type="number" class="cc-trk-max" value="${esc(hasMax ? mx : "")}" placeholder="—" ${mode === "unlimited" ? "disabled" : ""}></label>
+          <select class="cc-trk-mode">
+            <option value="normal"${mode === "normal" ? " selected" : ""}>Normal</option>
+            <option value="locked"${mode === "locked" ? " selected" : ""}>🔒 Locked</option>
+            <option value="unlimited"${mode === "unlimited" ? " selected" : ""}>∞ Unlimited</option>
+          </select>
+        </span>
+      </div>`;
+    }).join("");
+    box.innerHTML = rows;
+    box.querySelectorAll(".cc-trkrow").forEach((row) => {
+      const key = row.dataset.k;
+      const def = defs.find((x) => x.key === key);
+      const seed = trkSeed();
+      const seedVal = seed[key] ?? 0;
+      const seedMax = seed[key + ".max"] ?? liveMax(def, seed, ensureStats(ccStats, statDefs));
+      const put = (k, v) => {
+        ccTrkOverrides = { ...(ccTrkOverrides || {}) };
+        if (v === undefined) delete ccTrkOverrides[k]; else ccTrkOverrides[k] = v;
+        if (!Object.keys(ccTrkOverrides).length) ccTrkOverrides = null;
+        saveDraft();
+      };
+      row.querySelector(".cc-trk-val").onchange = (e) => {
+        const n = Number(e.target.value);
+        put(key, Number.isFinite(n) && n !== seedVal ? Math.max(0, Math.round(n)) : undefined);
+      };
+      row.querySelector(".cc-trk-max").onchange = (e) => {
+        const raw = e.target.value.trim();
+        if (raw === "") { put(key + ".max", undefined); return; }
+        const n = Number(raw);
+        put(key + ".max", Number.isFinite(n) && n !== seedMax ? Math.max(0, Math.round(n)) : undefined);
+      };
+      row.querySelector(".cc-trk-mode").onchange = (e) => {
+        ccTrkModes = { ...(ccTrkModes || {}) };
+        if (e.target.value === "normal") delete ccTrkModes[key]; else ccTrkModes[key] = e.target.value;
+        if (!Object.keys(ccTrkModes).length) ccTrkModes = null;
+        saveDraft();
+        renderTrackers(); // re-render so locked/unlimited disable the value/max inputs
+      };
+    });
+    saveDraft();
+  }
   // Restore every stat to its starting value and refund the whole budget.
   function resetStats() {
     if (!statDefs.length) return;
@@ -10619,6 +10780,7 @@ function openCharacterCreation(s, onDone, onCancel) {
     next.textContent = ccStepIdx === ccSteps.length - 1 ? "⚔ Begin Adventure" : "Next →";
     showErr("");
     if (cur === "stats") renderStats();
+    if (cur === "trackers") renderTrackers();
     if (cur === "review") renderReview();
     if (cur === "start") renderStartPicker();
     saveDraft();
@@ -10626,8 +10788,19 @@ function openCharacterCreation(s, onDone, onCancel) {
 
   function finalize() {
     readBio();
+    // Review-step fields live in the DOM (textarea/checkbox) — read them into the wizard state
+    // so Begin always persists what the player last saw.
+    const pwEl = overlay.querySelector("#ccPowers");
+    if (pwEl) ccPowers = pwEl.value;
+    const ncfEl = overlay.querySelector("#ccNoCritFail");
+    if (ncfEl) ccNoCritFail = !!ncfEl.checked;
     for (const d of statDefs) ccStats[d.key] = Math.min(clampStat(ccStats[d.key] ?? d.start, d), ccHi(d));
     c.stats = ensureStats(ccStats, statDefs);
+    c.freeBuild = ccFreeBuild;
+    c.trackerOverrides = ccTrkOverrides; // hero-level starting overrides (may be null)
+    c.trackerModes = ccTrkModes;         // locked/unlimited per tracker (may be null)
+    c.powers = String(ccPowers || "").trim();
+    c.noCritFail = ccNoCritFail;
     c.statPoints = 0;
     c.statCommitted = false;
     c.statFloors = { ...c.stats };
@@ -10653,8 +10826,10 @@ function openCharacterCreation(s, onDone, onCancel) {
     }
     // Recompute the session's starting tracker values now that the hero's FINAL stats are known,
     // so any stat-derived starts/maxs (world trackers `start = = expr` / `max = = expr`) begin correct.
-    // The chosen opening's starting-tracker overrides ride on top (absent = world defaults).
-    s.initialTrackers = applyTrackerStartOverrides(initialTrackers(trackerDefs, c.stats), trackerDefs, picked && picked.trackerOverrides, c.stats);
+    // The chosen opening's starting-tracker overrides ride on top (absent = world defaults), and
+    // the HERO's own overrides ride on top of those — the player's explicit choices win.
+    const mergedOv = { ...((picked && picked.trackerOverrides) || {}), ...(c.trackerOverrides || {}) };
+    s.initialTrackers = applyTrackerStartOverrides(initialTrackers(trackerDefs, c.stats), trackerDefs, Object.keys(mergedOv).length ? mergedOv : null, c.stats);
     store.save(s).then(() => {
       clearDraft();
       release();
@@ -10756,6 +10931,13 @@ function openCharacterCreation(s, onDone, onCancel) {
   };
   overlay.querySelector("#ccResetStats").onclick = () => resetStats();
   overlay.querySelector("#ccRollStats").onclick = () => randomizeStats();
+  // Free-build toggle: repaint the step (copy, points row, +/− availability all change) and
+  // keep unsaved allocations consistent — switching OFF can leave stats above the budget,
+  // which the review warning already covers ("begin anyway").
+  overlay.querySelector("#ccFreeBuild").onchange = (e) => {
+    ccFreeBuild = !!e.target.checked;
+    renderStats();
+  };
   overlay.querySelector("#ccSaveHero").onclick = async () => {
     readBio();
     showErr("");
@@ -10808,6 +10990,9 @@ function openCharacterCreation(s, onDone, onCancel) {
   restoreDraft().then(() => {
     // Draft may have carried a startId — re-apply it to the picker/review if so.
     if (ccStarts.length > 1 && ccStartId) renderStartPicker();
+    const fb = overlay.querySelector("#ccFreeBuild");
+    if (fb) fb.checked = ccFreeBuild;
+    if (statDefs.length) renderStats(); // draft restore may have changed stats/toggle state
   });
   (async () => {
     try {
@@ -10818,7 +11003,12 @@ function openCharacterCreation(s, onDone, onCancel) {
       s.startId = s.startId || ccStartId;
       if (ccStartId && !s.startId) s.startId = ccStartId;
       const multi = ccStarts.length > 1;
-      ccSteps = multi ? ["start", "bio", "avatar", "stats", "review"] : ["bio", "avatar", "stats", "review"];
+      // Trackers step exists only when the world has number trackers to tune (text-only trackers
+      // have nothing a value/max/mode UI can act on).
+      const hasTrk = (trackerDefs || []).some((d) => d && d.type === "number");
+      ccSteps = multi
+        ? ["start", "bio", "avatar", "stats", ...(hasTrk ? ["trackers"] : []), "review"]
+        : ["bio", "avatar", "stats", ...(hasTrk ? ["trackers"] : []), "review"];
       // Keep the player where they are when the steps arrive late (they can't be on start
       // when there is no start step).
       ccStepIdx = Math.max(0, Math.min(ccStepIdx, ccSteps.length - 1));
@@ -10846,22 +11036,23 @@ function renderCharacterPanel(body) {
   const heroRows = heroTrackerRowsHtml(curTrk);
   const statusHtml = `<div class="trkrow hstat" id="heroTrkRow" style="justify-content:flex-start"${heroRows.length ? "" : " hidden"}>${heroRows.join("")}</div>`;
 
-  // Stats are read-only during play. A level-up grants points that open a spend window (−/+
-  // appear). Nothing locks until Save: Save re-baselines each stat to its current value, so the
-  // spent allocation can no longer be refunded — but any remaining points stay spendable and
-  // movable until the next Save. `hint` shows through the ⓘ info-tip beside the label (same
+  // Stats are read-only during play — EXCEPT when the hero's OP ✎ edit mode is on (freeEdit),
+  // which keeps the −/+ controls alive outside a level-up window (spendStat skips the point
+  // cost) and reveals the tracker editor below. Nothing locks until Save: Save re-baselines
+  // each stat to its current value. `hint` shows through the ⓘ info-tip beside the label (same
   // convention as trackers); `rules` is only ever for the GM (CHARACTER SHEET context),
   // never shown in the UI.
+  const editable = windowOpen || !!c.freeEdit;
   const statsHtml = statDefs.map((d) => {
     const val = clampStat(c.stats[d.key], d);
     const atMax = d.max !== undefined && val >= d.max;
     const floor = typeof floors[d.key] === "number" ? floors[d.key] : 0;
     const canDec = val > floor && val > 0;
     const vc = statTier(val, { averageThreshold: statAvgT, exceptionalThreshold: statExcT });
-    const ctrl = windowOpen
+    const ctrl = editable
       ? `<button type="button" class="mini stat-dec" data-k="${esc(d.key)}" ${canDec ? "" : "disabled"} title="Refund a point">−</button>
          <span class="stat-val ${vc}">${val}</span>
-         <button type="button" class="mini ok stat-inc" data-k="${esc(d.key)}" ${(atMax || pts <= 0) ? "disabled" : ""} title="Spend a point">+</button>`
+         <button type="button" class="mini ok stat-inc" data-k="${esc(d.key)}" ${(atMax || (windowOpen && pts <= 0)) ? "disabled" : ""} title="Spend a point">+</button>`
       : `<span class="stat-val ${vc}">${val}</span>`;
     return `<div class="statrow">
       ${statInfoTip(d, val)}
@@ -10873,9 +11064,12 @@ function renderCharacterPanel(body) {
   const ptsIcon = (lvlDef && lvlDef.icon) ? lvlDef.icon : "◆";
   const banner = windowOpen
     ? `<div class="pts-avail has">${esc(ptsIcon)} available stat points: <b>${pts}</b> — spend them below (＋), refund with −; Save locks your allocation</div>`
-    : `<div class="pts-avail">${esc(ptsIcon)} available stat points: <b>${pts}</b></div>`;
-  // Save appears only while a level-up window is open (points to allocate or an allocation to lock).
-  const showSave = windowOpen;
+    : c.freeEdit
+      ? `<div class="pts-avail has">✎ Free edit is on — adjust stats freely (−/+ below${pts ? `, ${pts} point${pts === 1 ? "" : "s"} also available` : ""}); Save re-baselines them</div>`
+      : `<div class="pts-avail">${esc(ptsIcon)} available stat points: <b>${pts}</b></div>`;
+  // Save appears while a level-up window is open (points to allocate or an allocation to lock)
+  // and whenever ✎ edit mode is on (the player may have moved stats manually).
+  const showSave = windowOpen || !!c.freeEdit;
 
   // Hero panel tab key stays "bio" (and the NPC popup's keys stay "profile"/"memory"); only the
   // visible label changed to "Profile" so the hero panel matches the NPC popup's Profile tab.
@@ -10895,11 +11089,31 @@ function renderCharacterPanel(body) {
 
   // Worlds without stats have no Stats tab — the tab bar shows Profile alone.
   const hasStats = statDefs.length > 0;
+  // OP ✎ tracker editor: number trackers with live value/max inputs (mode badges included).
+  const numTrkDefs = (trackerDefs || []).filter((d) => d && d.type === "number");
+  const trkEditHtml = (!c.freeEdit || !numTrkDefs.length) ? "" : (() => {
+    const modes = c.trackerModes || {};
+    const rows = numTrkDefs.map((d) => {
+      const v = curTrk[d.key] ?? 0;
+      const mx = curTrk[d.key + ".max"] ?? liveMax(d, curTrk, c.stats);
+      const mode = modes[d.key];
+      const badge = mode === "locked" ? " 🔒" : mode === "unlimited" ? " ∞" : "";
+      return `<div class="cc-trkrow">
+        <span class="cc-trk-name"><b>${esc((d.label && d.label.trim()) || d.key)}</b>${badge}</span>
+        <span class="cc-trk-ctrl">
+          <label class="cc-trk-lbl">Value <input type="number" class="hero-trk-val" data-k="${esc(d.key)}" value="${esc(v)}"></label>
+          <label class="cc-trk-lbl">Max <input type="number" class="hero-trk-max" data-k="${esc(d.key)}" value="${esc(mx !== undefined && mx !== null ? mx : "")}" placeholder="—"></label>
+        </span>
+      </div>`;
+    }).join("");
+    return `<div class="hero-trk-edit"><div class="cc-rev-sec">Trackers (✎ edit)</div>${rows}</div>`;
+  })();
   const activeTab = hasStats ? heroTab : "bio";
   body.innerHTML = `
     <div class="hero-avatar">${portraitHtml(c, 150)}</div>
     <div class="hero-name">
       <span class="hero-name-v">${esc(c.name) || "Unnamed"}</span>
+      <button type="button" class="npc-edit hero-freeedit${c.freeEdit ? " on" : ""}" id="cFreeEdit" title="OP edit — freely change stats and trackers between turns (the GM sees the new values next turn)">✎</button>
       <button type="button" class="npc-edit hero-name-edit" title="Edit name">✎</button>
     </div>
     ${statusHtml}
@@ -10908,7 +11122,7 @@ function renderCharacterPanel(body) {
       <button type="button" class="seg-btn${activeTab === "bio" ? " on" : ""}" data-htab="bio">Profile</button>
     </div>
     ${hasStats ? `<div class="hero-tab-body" data-tab="stats" ${activeTab === "stats" ? "" : "hidden"}>
-      ${banner}${statsHtml}
+      ${banner}${statsHtml}${trkEditHtml}
       ${showSave ? `<button class="btn ok" id="cSave">Save</button>` : ""}
     </div>` : ""}
     <div class="hero-tab-body" data-tab="bio" ${activeTab === "bio" ? "" : "hidden"}>
@@ -10941,6 +11155,32 @@ function renderCharacterPanel(body) {
     heroTab = b.dataset.htab;
     renderCharacterPanel(body);
   }));
+  // OP ✎ edit mode toggle: keeps the panel's stats −/+ alive outside level-up windows and
+  // reveals the tracker editor. Persisted on the hero (per-session), not a global setting.
+  const freeBtn = body.querySelector("#cFreeEdit");
+  if (freeBtn) freeBtn.onclick = () => {
+    c.freeEdit = !c.freeEdit;
+    store.save(state).catch((e) => { if (typeof isStorageError === "function" && (isStorageError(e) || (e && e.isStorageUnavailable))) { try { notifyStorageError(notify, "saving", e); } catch (_) {} } else console.warn("[session] background save failed:", e); });
+    notify(c.freeEdit ? "✎ Free edit on — stats and trackers are yours to change" : "Free edit off");
+    renderCharacterPanel(body);
+  };
+  // OP ✎ tracker editor inputs: a change rewrites the LATEST afterTrackers snapshot (or the
+  // initial seed), so the next turn's GM context and tracker strip pick it up immediately.
+  const onTrkInput = (sel, pickMax) => body.querySelectorAll(sel).forEach((inp) => (inp.onchange = () => {
+    const key = inp.dataset.k;
+    const def = (trackerDefs || []).find((x) => x.key === key);
+    if (!def) return;
+    const raw = inp.value.trim();
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    applyManualTrackerEdit(key, pickMax ? undefined : Math.max(0, Math.round(n)), pickMax ? Math.max(0, Math.round(n)) : undefined);
+    store.save(state).catch((e) => { if (typeof isStorageError === "function" && (isStorageError(e) || (e && e.isStorageUnavailable))) { try { notifyStorageError(notify, "saving", e); } catch (_) {} } else console.warn("[session] background save failed:", e); });
+    notify("📊 " + ((def.label && def.label.trim()) || key) + " updated");
+    refreshHeroTrackerRow();
+    renderCharacterPanel(body);
+  }));
+  onTrkInput(".hero-trk-val", false);
+  onTrkInput(".hero-trk-max", true);
   if (showSave) {
     body.querySelector("#cSave").onclick = () => {
       c.statFloors = { ...c.stats }; // lock the current allocation — refunds can't dip below this
@@ -10992,10 +11232,13 @@ function spendStat(body, c, key, delta) {
   const d = statDefs.find((x) => x.key === key);
   if (!d) return;
   const cur = clampStat(c.stats[key], d);
+  // OP ✎ edit mode: raising costs no points (the point pool is untouched); refunds still
+  // credit a point back when the stat moves above its floor, same bookkeeping as level-ups.
+  const free = !!c.freeEdit;
   if (delta > 0) {
-    if (c.statPoints <= 0 || (d.max !== undefined && cur >= d.max)) return;
+    if ((!free && c.statPoints <= 0) || (d.max !== undefined && cur >= d.max)) return;
     c.stats[key] = cur + 1;
-    c.statPoints--;
+    if (!free) c.statPoints--;
   } else {
     const floors = (c.statFloors && typeof c.statFloors === "object") ? c.statFloors : {};
     const floor = typeof floors[key] === "number" ? floors[key] : 0;
