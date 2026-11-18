@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>rpge storage test</title></head>
+<body>
+<!-- Harness for tools/check-storage.js: just the kv plugin + the storage mirror shim. -->
+<div id="status">…</div>
+<script src="../app/shims/perchance-shim.js"></script>
+<script src="../app/shims/loreweaver-storage.js"></script>
+<script>
+  window.statusEl = document.getElementById("status");
+  document.addEventListener("DOMContentLoaded", () => {
+    statusEl.textContent = "ready kv=" + (window.root && window.root.kv ? "yes" : "no");
+  });
+</script>
+</body>
+</html>

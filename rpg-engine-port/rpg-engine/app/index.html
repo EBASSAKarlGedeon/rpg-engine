@@ -14,6 +14,9 @@
 <script src="shims/loreweaver-bridge.js"></script>
 <!-- 1) stand-ins for the Perchance platform plugins (defines window.root) -->
 <script src="shims/perchance-shim.js"></script>
+<!-- 1b) Loreweaver storage mirror: kv folders (rpg/worlds) mirror to the server so saves
+        sync between devices (after perchance-shim, before boot.js copies root.kv) -->
+<script src="shims/loreweaver-storage.js"></script>
 <!-- 2) original boot script: copies root.* plugins onto window.* -->
 <script src="src/scripts/boot.js"></script>
 <!-- 3) the app itself (untouched) -->
