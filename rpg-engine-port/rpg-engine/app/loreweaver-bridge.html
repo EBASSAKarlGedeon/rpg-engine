@@ -25,52 +25,45 @@
   .state.on { color: #7bd07b; } .state.off { color: #a89c82; }
   ol { padding-left: 22px; }
   .hint { font-size: 13px; margin-top: 4px; }
+  #profileInfo { font-size: 13px; color: #8a8070; margin-top: 6px; }
 </style>
 </head>
 <body>
 <main>
   <h1>Loreweaver bridge</h1>
-  <p>Route the game's AI calls through the <b>Loreweaver server</b> instead of calling model
-     providers from this page. The API key is resolved <b>server-side</b> from Loreweaver's own
-     key store (Settings &gt; API Keys &gt; Custom) and never enters this page. Streaming works.</p>
+  <p>Route the game's AI calls through the <b>Loreweaver server</b>, using one of your
+     <b>Connection Manager profiles</b> — the same connections the chat uses. The API key is
+     resolved <b>server-side</b> from the profile's stored key and never enters this page.
+     Streaming works.</p>
   <p class="hint">Status: bridge is <span id="state" class="state">…</span></p>
 
-  <p><label><input type="checkbox" id="enabled"> Route all model calls through Loreweaver</label></p>
+  <label for="profile">Connection profile</label>
+  <select id="profile"><option value="">Loading profiles…</option></select>
+  <div id="profileInfo"></div>
 
-  <label for="source">Loreweaver connection source</label>
-  <select id="source">
-    <option value="custom">Custom (OpenAI-compatible endpoint)</option>
-    <option value="openai">OpenAI</option>
-    <option value="openrouter">OpenRouter</option>
-    <option value="deepseek">DeepSeek</option>
-    <option value="mistralai">MistralAI</option>
-    <option value="groq">Groq</option>
-    <option value="xai">xAI</option>
-  </select>
-  <p class="hint">Which Loreweaver connection should serve the game. For <b>Custom</b>, the key must
-     be saved in Loreweaver (Settings &gt; API Keys &gt; Custom). Other sources use their own key
-     stored in Loreweaver.</p>
+  <p><label><input type="checkbox" id="usePreset" checked> Use the profile's preset sampling
+     (temperature, top&nbsp;p, penalties…) when the game doesn't set its own</label></p>
+  <p><label><input type="checkbox" id="enabled"> Route all model calls through Loreweaver</label></p>
 
   <div class="row">
     <button id="save">Save</button>
-    <button id="check" class="secondary">Detect Loreweaver</button>
     <button id="test" class="secondary">Test call through bridge</button>
     <button id="off" class="secondary">Turn bridge off</button>
   </div>
   <div id="msg" role="status"></div>
 
-  <h1 style="margin-top:34px">Setup</h1>
+  <h1 style="margin-top:34px">How it works</h1>
   <ol>
-    <li>In Loreweaver, connect the provider you want the game to use (its key is then stored
-        server-side in Loreweaver's secrets).</li>
-    <li>In the game: <b>Settings &gt; AI Model</b> — pick <b>OpenAI (custom-compatible)</b>, enter the
-        <b>same Base URL</b> as in Loreweaver and the model name. The <b>API key field can be anything
-        non-empty</b> ("loreweaver") — the bridge replaces it with the server-side key.</li>
-    <li>Turn the bridge on here and run <b>Test call</b>.</li>
+    <li>The chosen profile decides everything: endpoint URL, model, and API key
+        (its <code>secret-id</code> entry in Loreweaver's server-side key store).</li>
+    <li>The game's <b>Settings &gt; AI Model</b> base URL and model are <b>ignored</b> while the
+        bridge is on (its key field can stay anything). Per-call routing (trackers etc. on a cheap
+        second profile) is planned — right now one profile serves all calls.</li>
+    <li>The cheap secondary model (the Perchance AI slot on <code>cheap-model.html</code>) also
+        routes through the same profile while the bridge is on.</li>
   </ol>
-  <p class="hint">The cheap secondary model (the Perchance AI slot on <code>cheap-model.html</code>)
-     also routes through the bridge while it is on — its Base URL + model are applied the same way.
-     When served standalone (python <code>http.server</code>), keep the bridge off.</p>
+  <p class="hint">Only works when this page is served by Loreweaver (same origin). Keep the bridge
+     off for standalone use (python <code>http.server</code>).</p>
 </main>
 <script>
 (function () {
@@ -78,34 +71,66 @@
   var B = window.LoreweaverBridge;
   var say = function (t, cls) { var m = $("msg"); m.textContent = t; m.className = cls || ""; };
   function refreshState() { $("state").textContent = B.isEnabled() ? "ON" : "OFF"; $("state").className = "state " + (B.isEnabled() ? "on" : "off"); }
-  function fill() { var c = B.read(); $("enabled").checked = c.enabled === true; $("source").value = c.source || "custom"; refreshState(); }
+
+  function loadProfiles() {
+    B.getSettings().then(function (lw) {
+      var sel = $("profile"); sel.innerHTML = "";
+      if (!lw.profiles.length) {
+        sel.innerHTML = "<option value=''>No connection profiles found</option>";
+        $("profileInfo").textContent = "Create one in Loreweaver: Extensions > Connection Manager.";
+        return;
+      }
+      var cfg = B.read();
+      var effective = cfg.profileId || lw.selectedProfile;
+      lw.profiles.forEach(function (p) {
+        var o = document.createElement("option");
+        o.value = p.id;
+        o.textContent = (p.name || p.id) + (p.model ? " — " + p.model : "");
+        sel.appendChild(o);
+      });
+      sel.value = lw.profiles.some(function (p) { return p.id === effective; }) ? effective : lw.profiles[0].id;
+      showProfileInfo();
+    }).catch(function (e) {
+      $("profile").innerHTML = "<option value=''>Could not load profiles</option>";
+      $("profileInfo").textContent = String(e.message || e);
+    });
+  }
+  function showProfileInfo() {
+    B.getSettings().then(function (lw) {
+      var p = lw.profiles.find(function (x) { return x.id === $("profile").value; });
+      if (!p) { $("profileInfo").textContent = ""; return; }
+      $("profileInfo").textContent = [
+        "api: " + (p.api || "?"),
+        "model: " + (p.model || "?"),
+        "url: " + (p["api-url"] || "?"),
+        "preset: " + (p.preset || "—"),
+        "key: " + (p["secret-id"] ? "stored server-side ✓" : "⚠ no key in profile"),
+      ].join("  ·  ");
+    });
+  }
+  $("profile").addEventListener("change", showProfileInfo);
+
+  function fill() {
+    var c = B.read();
+    $("enabled").checked = c.enabled === true;
+    $("usePreset").checked = c.usePreset !== false;
+    refreshState();
+  }
 
   $("save").onclick = function () {
-    B.write({ enabled: $("enabled").checked, source: $("source").value });
+    B.write({ enabled: $("enabled").checked, profileId: $("profile").value || null, usePreset: $("usePreset").checked });
     fill(); say($("enabled").checked ? "Bridge is ON — calls now go through Loreweaver." : "Bridge is OFF.", "ok");
   };
-  $("off").onclick = function () { B.write({ enabled: false, source: $("source").value }); fill(); say("Bridge turned off.", "info"); };
-
-  $("check").onclick = function () {
-    say("Checking…", "info");
-    fetch("/csrf-token", { credentials: "include" })
-      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(function (j) { if (j && j.token) say("Loreweaver detected on " + location.origin + " — session is valid.", "ok"); else throw new Error("no token"); })
-      .catch(function (e) { say("This page is not served by Loreweaver (" + e.message + "). Keep the bridge off for standalone use.", "bad"); });
-  };
+  $("off").onclick = function () { var c = B.read(); c.enabled = false; B.write(c); fill(); say("Bridge turned off.", "info"); };
 
   $("test").onclick = function () {
     if (!B.isEnabled()) { say("Turn the bridge on and Save first.", "bad"); return; }
-    var cfg;
-    try { cfg = JSON.parse(localStorage.getItem("mno.aiProvider") || "null"); } catch (e) { cfg = null; }
-    var entry = cfg && cfg.providers && (cfg.providers[cfg.provider] || {});
-    var baseUrl = entry.baseUrl, model = entry.model;
-    if (!baseUrl || !model) { say("No model configured in the game yet (Settings > AI Model).", "bad"); return; }
-    say("Calling " + model + " via Loreweaver…", "info");
-    B.bridgeFetch(baseUrl + "/chat/completions", {
+    // Any OpenAI-style endpoint works — the profile overrides URL/model/key anyway.
+    say("Calling through Loreweaver…", "info");
+    B.bridgeFetch("http://placeholder.invalid/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer placeholder" },
-      body: JSON.stringify({ model: model, messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5, stream: false })
+      body: JSON.stringify({ model: "placeholder", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 16, stream: false })
     }).then(function (r) {
       return r.json().then(function (j) { return { r: r, j: j }; });
     }).then(function (x) {
@@ -122,6 +147,7 @@
   };
 
   fill();
+  loadProfiles();
 })();
 </script>
 </body>

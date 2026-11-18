@@ -1,9 +1,10 @@
-// Verifies the Loreweaver bridge shim end-to-end: loreweaver-bridge.html toggles the bridge,
-// the "Test call" goes through the mock Loreweaver server, which injects the server-side key
-// and streams the reply back. Also checks the key never leaves the server side.
-//   node tools/check-bridge.js http://127.0.0.1:8765/loreweaver-bridge.html [screenshot.png]
-// (the script itself starts a combined static + mock-Loreweaver server on 8765 — same origin,
-//  like production where the Loreweaver backend serves the app)
+// Verifies the Loreweaver bridge shim end-to-end: loreweaver-bridge.html loads connection
+// profiles from /api/settings/get, the "Test call" goes through the mock Loreweaver server,
+// and the request is parameterised by the SELECTED PROFILE (api source, custom_url, model,
+// secret_id, preset sampling). Also checks the key never leaves the server side.
+//   node tools/check-bridge.js [screenshot.png]
+// (the script starts a combined static + mock-Loreweaver server on 8765 — same origin, like
+//  production where the Loreweaver backend serves the app)
 const { chromium } = require("playwright");
 const http = require("http");
 const fs = require("fs");
@@ -13,9 +14,16 @@ const APP_ROOT = path.join(__dirname, "..", "app");
 const STATIC_PORT = 8765;
 const CALL_LOG = [];
 
+const PROFILE = {
+  id: "prof-1", mode: "cc", api: "custom", name: "Mock Profile",
+  "api-url": "http://upstream.example/v1", model: "profile-model",
+  "secret-id": "sec-uuid-1", preset: "Test Preset", proxy: "None",
+  "prompt-post-processing": "none",
+};
+const PRESETS = { "Test Preset": { temperature: 0.42, top_p: 0.9, frequency_penalty: 0.5 } };
+
 // ---- static server for app/ + mock Loreweaver backend on the SAME origin (as in production:
-//      the app is served by the Loreweaver server itself). Upstream "provider" is simulated
-//      inline (no second server needed): the mock injects the server-side key and streams SSE.
+//      the app is served by the Loreweaver server itself) ----
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".png": "image/png", ".webp": "image/webp", ".svg": "image/svg+xml" };
 const sessions = new Set();
 const staticSrv = http.createServer((req, res) => {
@@ -34,6 +42,15 @@ const staticSrv = http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
     return res.end(JSON.stringify({ token: "csrf-" + sid }));
   }
+  if (url.pathname === "/api/settings/get") {
+    // production: served to any logged-in session; not CSRF-gated (GET)
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({
+      settings: { extension_settings: { connectionManager: { selectedProfile: PROFILE.id, profiles: [PROFILE] } } },
+      openai_setting_names: Object.keys(PRESETS),
+      openai_settings: Object.values(PRESETS).map((p) => JSON.stringify(p)),
+    }));
+  }
   if (url.pathname === "/api/backends/chat-completions/generate" && req.method === "POST") {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -45,20 +62,20 @@ const staticSrv = http.createServer((req, res) => {
         res.writeHead(403, { "Content-Type": "application/json" });
         return res.end(JSON.stringify({ error: { message: "Invalid CSRF token" } }));
       }
-      if (j.chat_completion_source !== "custom" || !j.custom_url) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ error: { message: "missing custom source/url" } }));
-      }
       CALL_LOG.push({
+        source: j.chat_completion_source,
         custom_url: j.custom_url,
         model: j.model,
-        stream: !!j.stream,
+        secret_id: j.secret_id,
         max_tokens: j.max_tokens,
-        stop: j.stop,
+        temperature: j.temperature,
+        top_p: j.top_p,
+        frequency_penalty: j.frequency_penalty,
+        stream: !!j.stream,
         pageAuth: req.headers.authorization === "Bearer placeholder",
       });
-      // in production the server forwards to {custom_url}/chat/completions with the real
-      // key; here we just answer like a provider would.
+      // in production the server looks up the key by secret_id and forwards to
+      // {custom_url}/chat/completions; here we just answer like a provider would.
       const text = "OK";
       if (j.stream) {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -85,8 +102,8 @@ const staticSrv = http.createServer((req, res) => {
 (async () => {
   await new Promise((r) => staticSrv.listen(STATIC_PORT, "127.0.0.1", r));
 
-  const [givenUrl, shot] = process.argv.slice(2);
-  const url = givenUrl || `http://127.0.0.1:${STATIC_PORT}/loreweaver-bridge.html`;
+  const [shot] = process.argv.slice(2);
+  const url = `http://127.0.0.1:${STATIC_PORT}/loreweaver-bridge.html`;
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
   const problems = [];
@@ -95,15 +112,17 @@ const staticSrv = http.createServer((req, res) => {
   await page.route("**/*", (r) => (/^http:\/\/127\.0\.0\.1/.test(r.request().url()) ? r.continue() : r.abort()));
   await page.addInitScript(() => {
     localStorage.setItem("mno.aiProvider", JSON.stringify({
-      provider: "openai", providers: { openai: { baseUrl: "http://127.0.0.1:8769/v1", model: "mock-main" } },
+      provider: "openai", providers: { openai: { baseUrl: "http://placeholder.invalid/v1", model: "engine-model" } },
     }));
     localStorage.setItem("mno.aiProviderKey", JSON.stringify({ openai: "placeholder" }));
   });
 
   await page.goto(url);
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(500);
 
-  // the config page itself: toggle on, save, run the built-in test
+  // the config page itself: profile dropdown loaded, toggle on, save, run the built-in test
+  const opt = await page.locator("#profile option").first().textContent();
+  if (!/Mock Profile/.test(opt)) problems.push("profile dropdown did not load: " + JSON.stringify(opt));
   await page.locator("#enabled").check();
   await page.locator("#save").click();
   const stateTxt = await page.locator("#state").textContent();
@@ -113,12 +132,13 @@ const staticSrv = http.createServer((req, res) => {
   const msg = await page.locator("#msg").textContent();
   if (!/Connected through Loreweaver/i.test(msg)) problems.push("test call failed: " + JSON.stringify(msg));
 
-  // and the same flow through a plain page fetch (what ai-provider.js does)
+  // and the same flow through a plain page fetch (what ai-provider.js does): engine asks for
+  // its own baseUrl/model, the bridge must replace them with the profile's.
   const direct = await page.evaluate(async () => {
-    const res = await fetch("http://127.0.0.1:8769/v1/chat/completions", {
+    const res = await fetch("http://placeholder.invalid/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer placeholder" },
-      body: JSON.stringify({ model: "mock-stream", stream: true, messages: [{ role: "user", content: "hi" }], max_tokens: 16, stop: ["\n\n"] }),
+      body: JSON.stringify({ model: "engine-model", stream: true, messages: [{ role: "user", content: "hi" }], max_tokens: 16, stop: ["\n\n"] }),
     });
     const text = await res.text();
     return { status: res.status, streamOk: /"delta"/.test(text) && /\[DONE\]/.test(text) };
@@ -126,18 +146,26 @@ const staticSrv = http.createServer((req, res) => {
   if (direct.status !== 200 || !direct.streamOk) problems.push("raw bridged stream failed: " + JSON.stringify(direct));
 
   // assertions on what the mock Loreweaver server saw
-  if (!CALL_LOG.length) problems.push("no calls reached the mock Loreweaver server");
+  if (CALL_LOG.length < 2) problems.push("expected 2 bridged calls, saw " + CALL_LOG.length);
   for (const c of CALL_LOG) {
-    if (c.custom_url !== "http://127.0.0.1:8769/v1") problems.push("custom_url wrong: " + c.custom_url);
-    if (c.model !== "mock-main" && c.model !== "mock-stream") problems.push("model wrong: " + c.model);
+    if (c.source !== "custom") problems.push("chat_completion_source wrong: " + c.source);
+    if (c.custom_url !== PROFILE["api-url"]) problems.push("custom_url not from profile: " + c.custom_url);
+    if (c.model !== "profile-model") problems.push("model not from profile: " + c.model);
+    if (c.secret_id !== "sec-uuid-1") problems.push("secret_id not from profile: " + c.secret_id);
+    if (c.pageAuth) problems.push("placeholder Authorization reached the server (bridge did not strip it)");
   }
-
-  // the page must never talk to the provider directly (route blocking would abort it);
-  // prove the shim dropped the placeholder Authorization before sending (server logged it)
-  const sawPlaceholder = CALL_LOG.some((c) => c.pageAuth);
-  // NOTE: the mock treats the header the PAGE sent as "pageAuth"; the bridge should strip it,
-  // so pageAuth must be false (the server-side key is injected by the real backend).
-  if (sawPlaceholder) problems.push("placeholder Authorization reached the server (bridge did not strip it)");
+  const nonStream = CALL_LOG.find((c) => !c.stream);
+  if (nonStream) {
+    // preset sampling must be applied for fields the engine did not set
+    if (nonStream.temperature !== 0.42) problems.push("preset temperature not applied: " + nonStream.temperature);
+    if (nonStream.top_p !== 0.9) problems.push("preset top_p not applied: " + nonStream.top_p);
+    if (nonStream.frequency_penalty !== 0.5) problems.push("preset frequency_penalty not applied: " + nonStream.frequency_penalty);
+  }
+  const stream = CALL_LOG.find((c) => c.stream);
+  if (stream && stream.temperature !== undefined) {
+    // the engine set no temperature here either, so the preset should apply too
+    if (stream.temperature !== 0.42) problems.push("preset temperature missing on stream call: " + stream.temperature);
+  }
 
   console.log("calls:", JSON.stringify(CALL_LOG));
   if (shot) await page.screenshot({ path: shot });
