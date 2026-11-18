@@ -363,16 +363,51 @@
     if (!idx.some(function (w) { return w.id === sel.value; })) sel.value = idx[0].id;
     sel.onchange = function () {
       localStorage.setItem("rpge.importWorld", sel.value);
-      renderChars(); renderBooks();
+      loadCards(); renderBooks();
     };
   }
 
   // ---- characters UI ----
+  // /api/characters/all returns the FULL cards (~15 MB for a large library), which janks the
+  // page every load. So: fetch only when a target world is picked, cache the parsed list in
+  // kv.lwcache (a browser-local kv folder — NOT mirrored/synced), render instantly from cache,
+  // and refresh in the background when stale (>5 min) or on the Refresh button.
   let cardList = [];
+
+  async function cardsCache() { return (await window.root.kv.lwcache.get("cards")) || null; }
+  async function cardsCacheSave(list) { try { await window.root.kv.lwcache.set("cards", { at: Date.now(), list }); } catch (e) {} }
+
+  async function fetchCardList(force) {
+    if (!force) {
+      const c = await cardsCache();
+      if (c && Array.isArray(c.list) && c.list.length) {
+        cardList = c.list;
+        if (Date.now() - (c.at || 0) > 5 * 60 * 1000) {
+          // stale: re-render from cache now, refresh silently in the background
+          refreshCardsSilently();
+        }
+        return;
+      }
+    }
+    cardList = (await window.LoreweaverBridge.api("/api/characters/all")) || [];
+    await cardsCacheSave(cardList);
+  }
+
+  let refreshingCards = false;
+  async function refreshCardsSilently() {
+    if (refreshingCards) return;
+    refreshingCards = true;
+    try {
+      const fresh = (await window.LoreweaverBridge.api("/api/characters/all")) || [];
+      cardList = fresh;
+      await cardsCacheSave(fresh);
+      await renderChars();
+    } catch (e) {} finally { refreshingCards = false; }
+  }
 
   async function loadCards() {
     try {
-      cardList = (await window.LoreweaverBridge.api("/api/characters/all")) || [];
+      await fetchCardList(false);
       cardList.sort(function (a, b) { return String(a.name || "").localeCompare(String(b.name || "")); });
     } catch (e) {
       $("chars").innerHTML = "";
@@ -390,7 +425,23 @@
     }
     const reg = await regRead();
     const box = $("chars");
-    box.innerHTML = cardList.length ? "" : "<p>No characters found in Loreweaver.</p>";
+    box.innerHTML = "";
+    const head = document.createElement("div");
+    head.style.cssText = "margin-top:10px";
+    head.innerHTML = '<button class="secondary" style="padding:4px 10px;font-size:12px">\u27f3 Refresh list (' + cardList.length + ")</button>";
+    head.querySelector("button").onclick = async function () {
+      this.disabled = true; this.textContent = "\u27f3 \u2026";
+      try {
+        cardList = (await window.LoreweaverBridge.api("/api/characters/all")) || [];
+        await cardsCacheSave(cardList);
+        cardList.sort(function (a, b) { return String(a.name || "").localeCompare(String(b.name || "")); });
+        await renderChars();
+      } catch (e) {
+        say("Refresh failed: " + (e && e.message || e), "bad");
+        this.disabled = false;
+      }
+    };
+    box.appendChild(head);
     cardList.forEach(function (c) {
       const linked = reg.cards[c.avatar];
       const inWorld = linked && linked.worlds.some(function (w) { return w.worldId === worldId; });
@@ -494,7 +545,8 @@
   async function refresh() {
     await loadWorlds();
     await renderPersonas();
-    await loadCards();
+    // the characters fetch is big (full cards) — only pull it when a world is targeted
+    if ($("targetWorld").value) await loadCards();
     await loadBooks();
   }
 })();
