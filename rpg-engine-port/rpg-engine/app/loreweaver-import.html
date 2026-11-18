@@ -28,23 +28,44 @@
   button:disabled { opacity: .45; cursor: default; }
   #msg { margin-top: 18px; min-height: 1.5em; }
   .ok { color: #7bd07b; } .bad { color: #e06666; } .info { color: #a89c82; }
+  select#targetWorld { width: 100%; box-sizing: border-box; padding: 8px 10px; background: #1a1a18; border: 1px solid #2a2520; color: #e0d6b8; font: inherit; border-radius: 2px; }
+  label.lbl { display: block; margin: 14px 0 4px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: #8a8070; }
 </style>
 </head>
 <body>
 <main>
   <h1>Import from Loreweaver</h1>
+
+  <h1 style="font-size:15px;margin-top:8px">Personas → hero library</h1>
   <p>Import your <b>Loreweaver personas</b> as saved heroes. A linked snapshot is created in the
-     game's hero library — open the game, start/forging a hero, and <b>Load</b> it from the
-     library in any world. Mapping: name → <b>Name</b>, description → <b>Persona</b>, avatar →
-     <b>Portrait</b>; the other bio fields stay blank for you to fill in the game (stats are
-     always per-world and never imported).</p>
+     game's hero library — open the game, forge a hero, and <b>Load</b> it from the library in any
+     world. Mapping: name → <b>Name</b>, description → <b>Persona</b>, avatar → <b>Portrait</b>;
+     the other bio fields stay blank for you to fill in the game (stats are always per-world and
+     never imported).</p>
   <p class="hint">The import keeps a link to the source persona. Come back here to check for
      changes — updating overwrites only the imported fields (Name, Persona, Portrait), never
      anything you added in the game.</p>
   <div id="list">Loading personas…</div>
+
+  <h1 style="margin-top:34px">Character cards → world NPCs</h1>
+  <p>Add a Loreweaver <b>character</b> as a standing NPC in one of the game's worlds. Mapping:
+     name → <b>Name</b>, description + personality → <b>Persona</b>, scenario → <b>Extra
+     details</b>, card image → avatar. Fill the rest (race, appearance…) in the game's World
+     Editor. New adventures see the NPC at once; a RUNNING adventure picks it up on its next
+     load.</p>
+  <label class="lbl" for="targetWorld">Target world</label>
+  <select id="targetWorld"><option value="">Loading worlds…</option></select>
+  <div id="chars">Loading characters…</div>
+
+  <h1 style="margin-top:34px">World Info → world lorebook</h1>
+  <p>Copy a Loreweaver <b>World Info</b> book into the selected world's lorebook. Keywords
+     (secondary keys merged in) → triggers, constant entries → always-on, comment → title.
+     ST macros like <code>{{user}}</code>/<code>{{char}}</code> stay literal — edit them in the
+     World Editor if needed.</p>
+  <div id="books">Loading World Info…</div>
+
   <div id="msg" role="status"></div>
-  <p class="hint" style="margin-top:26px">Next: character cards → NPCs, World Info → world lore
-     (same page, later). <a href="loreweaver-bridge.html">← Back to the bridge page</a></p>
+  <p class="hint" style="margin-top:26px"><a href="loreweaver-bridge.html">← Back to the bridge page</a></p>
 </main>
 <script>
 (function () {
@@ -52,7 +73,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var say = function (t, cls) { var m = $("msg"); m.textContent = t; m.className = cls || ""; };
 
-  // Small non-crypto content hash (fnv1a hex) — enough to notice a persona description change.
+  // Small non-crypto content hash (fnv1a hex) — enough to notice a source change.
   function fnv1a(str) {
     var h = 0x811c9dc5, i, c;
     str = String(str || "");
@@ -61,6 +82,11 @@
       h ^= c; h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
     }
     return ("00000000" + h.toString(16)).slice(-8);
+  }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
   }
 
   // Downscale an avatar image to a compact JPEG dataURL (engine portraits are stored inline).
@@ -82,28 +108,45 @@
     });
   }
 
-  function avatarUrl(id) { return "/User%20Avatars/" + encodeURIComponent(id); }
+  function personaAvatarUrl(id) { return "/User%20Avatars/" + encodeURIComponent(id); }
+  function cardThumbUrl(avatar) { return "/thumbnail?type=avatar&file=" + encodeURIComponent(avatar); }
 
-  async function heroList() {
-    const rpg = window.root.kv.rpg;
-    const v = await rpg.get("savedHeroes");
-    return Array.isArray(v) ? v : [];
+  // ---- linked-snapshot registry (kv.rpg "lwImports") ----
+  // Source links live BESIDE the world JSON because normalizeWorld strips unknown NPC fields:
+  //   reg.cards[cardAvatar] = { hash, at, worlds: [{ worldId, npcName }] }
+  //   reg.books[bookFileId] = { hash, at, worlds: [{ worldId, titles: [...] }] }
+  const REG_KEY = "lwImports";
+  async function regRead() {
+    const v = await window.root.kv.rpg.get(REG_KEY);
+    const reg = (v && typeof v === "object") ? v : {};
+    reg.cards = reg.cards || {}; reg.books = reg.books || {};
+    return reg;
+  }
+  async function regWrite(reg) { await window.root.kv.rpg.set(REG_KEY, reg); }
+  async function regRecord(reg, kind, srcId, rec) { reg[kind][srcId] = rec; await regWrite(reg); }
+
+  async function loadWorldRaw(id) {
+    const raw = await window.root.kv.worlds.get(id);
+    return (raw && typeof raw === "object") ? raw : null;
   }
 
+  // ---- personas -> hero library ----
+  async function heroList() {
+    const v = await window.root.kv.rpg.get("savedHeroes");
+    return Array.isArray(v) ? v : [];
+  }
   async function saveHeroList(list) {
     const rpg = window.root.kv.rpg;
     while (list.length > 40) list.shift(); // same cap as the engine's HeroStore
     await rpg.set("savedHeroes", list);
   }
-
-  function findLinked(list, srcId) {
+  function findLinkedHero(list, srcId) {
     return list.find(function (h) { return h && h.lwSource && h.lwSource.type === "persona" && h.lwSource.id === srcId; }) || null;
   }
-
   async function importPersona(p) {
     const list = await heroList();
-    const existing = findLinked(list, p.id);
-    const portrait = await toPortraitDataUrl(avatarUrl(p.id));
+    const existing = findLinkedHero(list, p.id);
+    const portrait = await toPortraitDataUrl(personaAvatarUrl(p.id));
     const rec = existing || {
       id: "h_" + Math.random().toString(36).slice(2, 10),
       gender: "", race: "", age: "", job: "", appearance: "", extra: ""
@@ -124,49 +167,144 @@
     return { created: !existing };
   }
 
+  // ---- character cards -> world NPCs ----
+  function cardHash(c) { return fnv1a([c.description, c.personality, c.scenario].join("\u0000")); }
+
+  // World Info change detection: the /list endpoint returns no content, so the registry hash is
+  // the book's identity (name). "Update" always re-fetches and replaces the imported entries,
+  // so a stale status is only cosmetic — press Update to re-sync.
+  function bookHash(b) { return fnv1a([b.file_id, b.name].join("\u0000")); }
+
+  function buildNpcFromCard(card) {
+    const persona = [card.description, card.personality]
+      .map(function (s) { return String(s || "").trim(); }).filter(Boolean).join("\n\n");
+    return {
+      name: String(card.name || "").trim(),
+      age: "", gender: "", race: "", appearance: "", job: "",
+      persona: persona,
+      secrets: "",
+      extra: String(card.scenario || "").trim(),
+      avatar: card.avatar ? cardThumbUrl(card.avatar) : ""
+    };
+  }
+
+  async function importCardToWorld(card, worldId) {
+    const raw = await loadWorldRaw(worldId);
+    if (!raw) throw new Error("world not found");
+    raw.npcs = Array.isArray(raw.npcs) ? raw.npcs : [];
+    const npc = buildNpcFromCard(card);
+    if (!npc.name) throw new Error("card has no name");
+    const reg = await regRead();
+    const prev = reg.cards[card.avatar];
+    if (prev) {
+      // update every world this card was imported into (usually one); follow renames
+      for (const w of prev.worlds) {
+        const wr = await loadWorldRaw(w.worldId);
+        if (!wr || !Array.isArray(wr.npcs)) continue;
+        const i = wr.npcs.findIndex(function (n) { return n && n.name === w.npcName; });
+        if (i < 0) continue;
+        // only overwrite the imported fields that have content — never blank out game-side edits
+        const fresh = buildNpcFromCard(card);
+        for (const k of Object.keys(fresh)) if (fresh[k] === "") delete fresh[k];
+        wr.npcs[i] = Object.assign({}, wr.npcs[i], fresh);
+        wr.npcs[i].name = npc.name;
+        w.npcName = npc.name;
+        await window.root.kv.worlds.set(w.worldId, wr);
+      }
+      await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: prev.worlds });
+      return { updated: true, count: prev.worlds.length };
+    }
+    // fresh import: avoid a name collision with an existing world NPC
+    let targetName = npc.name;
+    const base = npc.name; let n = 2;
+    while (raw.npcs.some(function (x) { return x && String(x.name || "").toLowerCase() === targetName.toLowerCase(); })) {
+      targetName = base + " (" + (n++) + ")";
+    }
+    npc.name = targetName;
+    raw.npcs.push(npc);
+    await window.root.kv.worlds.set(worldId, raw);
+    const recs = prev ? prev.worlds || [] : [];
+    recs.push({ worldId: worldId, npcName: targetName });
+    await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: recs });
+    return { created: true, name: targetName };
+  }
+
+  // ---- World Info -> world lorebook ----
+  function wiEntryToLore(e) {
+    const content = String(e.content || "").trim();
+    if (!content) return null;
+    const kw = [].concat(Array.isArray(e.key) ? e.key : [], Array.isArray(e.keysecondary) ? e.keysecondary : []);
+    const entry = {
+      title: String(e.comment || "").trim(),
+      type: "lore",
+      activation: e.constant === true ? "always" : "keywords",
+      keywords: kw.map(function (s) { return String(s || "").trim(); }).filter(Boolean),
+      content: content
+    };
+    if (entry.activation === "keywords" && !entry.keywords.length) entry.activation = "always";
+    return entry;
+  }
+
+  async function importBookToWorld(book, worldId) {
+    const data = await window.LoreweaverBridge.api("/api/worldinfo/get", { name: book.file_id });
+    const rawEntries = (data && data.entries) || {};
+    const lore = [];
+    for (const uid of Object.keys(rawEntries)) {
+      const e = rawEntries[uid];
+      if (!e || e.disable === true || String(e.disable) === "true") continue;
+      const l = wiEntryToLore(e);
+      if (l) lore.push(l);
+    }
+    if (!lore.length) throw new Error("book has no enabled entries with content");
+    const raw = await loadWorldRaw(worldId);
+    if (!raw) throw new Error("world not found");
+    raw.lorebook = Array.isArray(raw.lorebook) ? raw.lorebook : [];
+    const reg = await regRead();
+    const prev = reg.books[book.file_id];
+    if (prev) {
+      for (const w of prev.worlds) {
+        const wr = await loadWorldRaw(w.worldId);
+        if (!wr) continue;
+        wr.lorebook = Array.isArray(wr.lorebook) ? wr.lorebook : [];
+        // remove only the entries we imported earlier (by title), then re-add
+        const titles = new Set(w.titles.map(function (t) { return String(t || "").toLowerCase(); }));
+        wr.lorebook = wr.lorebook.filter(function (e) {
+          const t = e && typeof e === "object" ? String(e.title || "").toLowerCase() : null;
+          return t === null || !titles.has(t);
+        });
+        wr.lorebook.push(...lore);
+        await window.root.kv.worlds.set(w.worldId, wr);
+      }
+      const worlds = prev.worlds.map(function (w) {
+        return Object.assign({}, w, { titles: lore.map(function (l) { return l.title; }) });
+      });
+      await regRecord(reg, "books", book.file_id, { hash: bookHash(book), at: Date.now(), worlds: worlds });
+      return { updated: true, count: lore.length };
+    }
+    raw.lorebook.push(...lore);
+    await window.root.kv.worlds.set(worldId, raw);
+    const worlds = prev ? prev.worlds || [] : [];
+    worlds.push({ worldId: worldId, titles: lore.map(function (l) { return l.title; }) });
+    await regRecord(reg, "books", book.file_id, { hash: bookHash(book), at: Date.now(), worlds: worlds });
+    return { created: true, count: lore.length };
+  }
+
+  // ---- row rendering helper ----
+  function row(html) {
+    const div = document.createElement("div");
+    div.className = "prow";
+    div.innerHTML = html;
+    return div;
+  }
+
+  // ---- personas UI ----
   function statusFor(p, linked) {
     if (!linked) return { cls: "", text: "not imported" };
     if (linked.lwSource.descHash !== fnv1a(p.description)) return { cls: "st-changed", text: "linked → hero “" + (linked.label || linked.name || "?") + "” — source changed, update" };
     return { cls: "st-ok", text: "linked → hero “" + (linked.label || linked.name || "?") + "” — up to date" };
   }
 
-  function render(rows, list) {
-    $("list").innerHTML = rows.length ? "" : "<p>No personas found in Loreweaver.</p>";
-    rows.forEach(function (p, i) {
-      const linked = findLinked(list, p.id);
-      const st = statusFor(p, linked);
-      const div = document.createElement("div");
-      div.className = "prow";
-      div.innerHTML =
-        '<img alt="" src="' + avatarUrl(p.id) + '" onerror="this.style.visibility=\'hidden\'">' +
-        '<div class="pmain"><span class="pname">' + escapeHtml(p.name || "(unnamed persona)") + "</span>" +
-        (p.isDefault ? '<span class="pbadge">default</span>' : "") +
-        '<div class="pdesc">' + escapeHtml(p.description || "no description") + "</div>" +
-        '<div class="pstatus ' + st.cls + '">' + st.text + "</div></div>" +
-        '<button data-i="' + i + '">' + (linked ? "Update" : "Import as hero") + "</button>";
-      div.querySelector("button").onclick = async function () {
-        this.disabled = true; this.textContent = "…";
-        try {
-          const r = await importPersona(p);
-          say(r.created ? "Imported “" + escapeHtml(p.name) + "” as a saved hero — Load it from the hero library in the game."
-                        : "Updated the linked hero “" + escapeHtml(p.name) + "”.", "ok");
-          await refresh();
-        } catch (e) {
-          say("Import failed: " + (e && e.message || e), "bad");
-          this.disabled = false; this.textContent = "Import as hero";
-        }
-      };
-      $("list").appendChild(div);
-    });
-  }
-
-  function escapeHtml(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-  }
-
-  async function refresh() {
+  async function renderPersonas() {
     try {
       const lw = await window.LoreweaverBridge.getSettings();
       const pu = (lw.parsed && lw.parsed.power_user) || {};
@@ -177,14 +315,182 @@
         return { id: id, name: names[id], description: (descs[id] && descs[id].description) || "", isDefault: id === def };
       });
       const list = await heroList();
-      render(rows, list);
+      const box = $("list");
+      box.innerHTML = rows.length ? "" : "<p>No personas found in Loreweaver.</p>";
+      rows.forEach(function (p) {
+        const linked = findLinkedHero(list, p.id);
+        const st = statusFor(p, linked);
+        const div = row(
+          '<img alt="" src="' + personaAvatarUrl(p.id) + '" onerror="this.style.visibility=\'hidden\'">' +
+          '<div class="pmain"><span class="pname">' + esc(p.name || "(unnamed persona)") + "</span>" +
+          (p.isDefault ? '<span class="pbadge">default</span>' : "") +
+          '<div class="pdesc">' + esc(p.description || "no description") + "</div>" +
+          '<div class="pstatus ' + st.cls + '">' + st.text + "</div></div>" +
+          '<button>' + (linked ? "Update" : "Import as hero") + "</button>");
+        div.querySelector("button").onclick = async function () {
+          this.disabled = true; this.textContent = "…";
+          try {
+            const r = await importPersona(p);
+            say(r.created ? "Imported “" + esc(p.name) + "” as a saved hero — Load it from the hero library in the game."
+                          : "Updated the linked hero “" + esc(p.name) + "”.", "ok");
+            await renderPersonas();
+          } catch (e) {
+            say("Import failed: " + (e && e.message || e), "bad");
+            this.disabled = false; this.textContent = linked ? "Update" : "Import as hero";
+          }
+        };
+        box.appendChild(div);
+      });
     } catch (e) {
       $("list").innerHTML = "";
       say("Could not load Loreweaver data (" + (e && e.message || e) + "). This page only works when the game is served by the Loreweaver backend.", "bad");
     }
   }
 
+  // ---- target world dropdown ----
+  async function loadWorlds() {
+    const sel = $("targetWorld");
+    let idx = [];
+    try { idx = (await window.root.kv.worlds.get("index")) || []; } catch (e) {}
+    if (!Array.isArray(idx) || !idx.length) {
+      sel.innerHTML = '<option value="">No game worlds yet — create one in the game first</option>';
+      return;
+    }
+    const remember = localStorage.getItem("rpge.importWorld") || "";
+    sel.innerHTML = idx.map(function (w) {
+      return '<option value="' + esc(w.id) + '"' + (w.id === remember ? " selected" : "") + ">" + esc(w.name || w.id) + "</option>";
+    }).join("");
+    if (!idx.some(function (w) { return w.id === sel.value; })) sel.value = idx[0].id;
+    sel.onchange = function () {
+      localStorage.setItem("rpge.importWorld", sel.value);
+      renderChars(); renderBooks();
+    };
+  }
+
+  // ---- characters UI ----
+  let cardList = [];
+
+  async function loadCards() {
+    try {
+      cardList = (await window.LoreweaverBridge.api("/api/characters/all")) || [];
+      cardList.sort(function (a, b) { return String(a.name || "").localeCompare(String(b.name || "")); });
+    } catch (e) {
+      $("chars").innerHTML = "";
+      say("Could not load characters: " + (e && e.message || e), "bad");
+      return;
+    }
+    await renderChars();
+  }
+
+  async function renderChars() {
+    const worldId = $("targetWorld").value;
+    if (!worldId) { $("chars").innerHTML = ""; return; }
+    const reg = await regRead();
+    const box = $("chars");
+    box.innerHTML = cardList.length ? "" : "<p>No characters found in Loreweaver.</p>";
+    cardList.forEach(function (c) {
+      const linked = reg.cards[c.avatar];
+      const inWorld = linked && linked.worlds.some(function (w) { return w.worldId === worldId; });
+      let st, btn;
+      if (inWorld) {
+        st = linked.hash !== cardHash(c)
+          ? { cls: "st-changed", text: "linked → NPC in this world — source changed, update" }
+          : { cls: "st-ok", text: "linked → NPC in this world — up to date" };
+        btn = "Update";
+      } else if (linked) {
+        st = { cls: "", text: "linked in “" + linked.worlds.map(function (w) { return w.worldId; }).join(", ") + "” — add to this world too" };
+        btn = "Add as NPC";
+      } else {
+        st = { cls: "", text: "not imported" };
+        btn = "Add as NPC";
+      }
+      const div = row(
+        '<img alt="" src="' + cardThumbUrl(c.avatar) + '" onerror="this.style.visibility=\'hidden\'">' +
+        '<div class="pmain"><span class="pname">' + esc(c.name || "(unnamed)") + "</span>" +
+        '<div class="pdesc">' + esc(String(c.description || "").slice(0, 140)) + "</div>" +
+        '<div class="pstatus ' + st.cls + '">' + st.text + "</div></div>" +
+        '<button>' + btn + "</button>");
+      div.querySelector("button").onclick = async function () {
+        this.disabled = true; this.textContent = "…";
+        try {
+          const full = await window.LoreweaverBridge.api("/api/characters/get", { avatar_url: c.avatar });
+          const card = (full && typeof full === "object" && full.name !== undefined) ? full : c;
+          const r = await importCardToWorld(card, worldId);
+          say(r.updated ? "Updated the linked NPC (" + r.count + " world(s))."
+                        : "Added “" + esc(r.name) + "” as an NPC.", "ok");
+          await renderChars();
+        } catch (e) {
+          say("Import failed: " + (e && e.message || e), "bad");
+          this.disabled = false; this.textContent = btn;
+        }
+      };
+      box.appendChild(div);
+    });
+  }
+
+  // ---- World Info UI ----
+  let bookList = [];
+
+  async function loadBooks() {
+    try {
+      bookList = (await window.LoreweaverBridge.api("/api/worldinfo/list")) || [];
+    } catch (e) {
+      $("books").innerHTML = "";
+      say("Could not load World Info: " + (e && e.message || e), "bad");
+      return;
+    }
+    await renderBooks();
+  }
+
+  async function renderBooks() {
+    const worldId = $("targetWorld").value;
+    if (!worldId) { $("books").innerHTML = ""; return; }
+    const reg = await regRead();
+    const box = $("books");
+    box.innerHTML = bookList.length ? "" : "<p>No World Info books found.</p>";
+    bookList.forEach(function (b) {
+      const linked = reg.books[b.file_id];
+      const inWorld = linked && linked.worlds.some(function (w) { return w.worldId === worldId; });
+      let st, btn;
+      if (inWorld) {
+        st = linked.hash !== bookHash(b)
+          ? { cls: "st-changed", text: "linked → lorebook in this world — source changed, update" }
+          : { cls: "st-ok", text: "linked → lorebook in this world — up to date" };
+        btn = "Update";
+      } else if (linked) {
+        st = { cls: "", text: "linked in “" + linked.worlds.map(function (w) { return w.worldId; }).join(", ") + "” — add to this world too" };
+        btn = "Import book";
+      } else {
+        st = { cls: "", text: "not imported" };
+        btn = "Import book";
+      }
+      const div = row(
+        '<div class="pmain"><span class="pname">' + esc(b.name || b.file_id) + "</span>" +
+        '<div class="pstatus ' + st.cls + '">' + st.text + "</div></div>" +
+        '<button>' + btn + "</button>");
+      div.querySelector("button").onclick = async function () {
+        this.disabled = true; this.textContent = "…";
+        try {
+          const r = await importBookToWorld(b, worldId);
+          say(r.updated ? "Updated the imported lorebook entries (" + r.count + ")."
+                        : "Imported " + r.count + " lore entries.", "ok");
+          await renderBooks();
+        } catch (e) {
+          say("Import failed: " + (e && e.message || e), "bad");
+          this.disabled = false; this.textContent = btn;
+        }
+      };
+      box.appendChild(div);
+    });
+  }
+
   refresh();
+  async function refresh() {
+    await loadWorlds();
+    await renderPersonas();
+    await loadCards();
+    await loadBooks();
+  }
 })();
 </script>
 </body>

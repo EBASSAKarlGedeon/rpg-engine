@@ -1,8 +1,11 @@
-// Verifies the "Import from Loreweaver" page (personas -> game hero library, linked snapshots):
+// Verifies the "Import from Loreweaver" page (linked snapshots):
+//   personas -> game hero library, character cards -> world NPCs, World Info -> world lorebook:
 //   - personas are listed from /api/settings/get (power_user.personas + persona_descriptions),
 //   - Import writes a proper hero record into kv.rpg.savedHeroes (name/persona/portrait/lwSource),
 //   - re-import does not duplicate (updates the linked hero),
-//   - a changed source description is detected and the Update overwrites only imported fields.
+//   - a changed source description is detected and the Update overwrites only imported fields,
+//   - character cards land as world NPCs (persona/extra/avatar + lwImports registry),
+//   - World Info books land as lorebook entries (keywords merged, constant -> always, disabled skipped).
 //   node tools/check-imports.js
 // (starts a combined static + mock-Loreweaver server on 8768 — same origin, like production)
 const { chromium } = require("playwright");
@@ -61,6 +64,45 @@ const srv = http.createServer((req, res) => {
       powerUser.persona_descriptions[body.id].description = body.description;
       return json({ ok: true });
     });
+  }
+
+  // ---- characters + World Info mocks ----
+  const cards = [
+    { name: "Kael", avatar: "kael.png", description: "A grim mercenary.", personality: "Cold, loyal.", scenario: "He owes you a debt." },
+    { name: "Vex", avatar: "vex.png", description: "A sly fixer.", personality: "Charming.", scenario: "She knows everyone." },
+  ];
+  if (url.pathname === "/api/characters/all" && req.method === "POST") {
+    const sid = cookies.sid, token = req.headers["x-csrf-token"];
+    if (!sid || !sessions.has(sid) || token !== "csrf-" + sid) { res.writeHead(403); return res.end(); }
+    return json(cards);
+  }
+  if (url.pathname === "/api/characters/get" && req.method === "POST") {
+    const sid = cookies.sid, token = req.headers["x-csrf-token"];
+    if (!sid || !sessions.has(sid) || token !== "csrf-" + sid) { res.writeHead(403); return res.end(); }
+    return readBody((body) => {
+      const c = cards.find((x) => x.avatar === body.avatar_url);
+      return c ? json(Object.assign({ first_mes: "Hi.", creator_notes: "n/a" }, c)) : (res.writeHead(404), res.end());
+    });
+  }
+  if (url.pathname === "/thumbnail" && url.searchParams.get("type") === "avatar") {
+    res.writeHead(200, { "Content-Type": "image/png" });
+    return res.end(AVATAR_PNG);
+  }
+  const wiBooks = { b1: { name: "Eldoria", entries: {
+    "0": { key: ["eldoria", "wood"], keysecondary: ["forest"], content: "Eldoria is an old wood.", comment: "eldoria", constant: false, disable: false },
+    "1": { key: [], content: "The crown always watches.", comment: "crown", constant: true, disable: false },
+    "2": { key: ["never"], content: "Disabled entry.", comment: "gone", constant: false, disable: true },
+    "3": { key: ["x"], content: "", comment: "empty", constant: false, disable: false },
+  } } };
+  if (url.pathname === "/api/worldinfo/list" && req.method === "POST") {
+    const sid = cookies.sid, token = req.headers["x-csrf-token"];
+    if (!sid || !sessions.has(sid) || token !== "csrf-" + sid) { res.writeHead(403); return res.end(); }
+    return json(Object.keys(wiBooks).map((id) => ({ file_id: id, name: wiBooks[id].name })));
+  }
+  if (url.pathname === "/api/worldinfo/get" && req.method === "POST") {
+    const sid = cookies.sid, token = req.headers["x-csrf-token"];
+    if (!sid || !sessions.has(sid) || token !== "csrf-" + sid) { res.writeHead(403); return res.end(); }
+    return readBody((body) => (wiBooks[body.name] ? json(wiBooks[body.name]) : (res.writeHead(404), res.end())));
   }
 
   const p = path.join(APP_ROOT, decodeURIComponent(url.pathname));
@@ -145,6 +187,60 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   if (list.length !== 2) problems.push("second import failed (got " + list.length + ")");
   const mira = list.find((x) => x.lwSource && x.lwSource.id === "p2.png");
   if (!mira || mira.name !== "Mira the Quiet") problems.push("second hero wrong: " + JSON.stringify(mira && mira.name));
+
+  // ---- character card -> world NPC ----
+  // A game world must exist for the dropdown: seed one in the raw stored file form.
+  await page.evaluate(async () => {
+    await window.root.kv.worlds.set("w1", { meta: { id: "w1", name: "Test World" }, npcs: [], lorebook: [] });
+    const idx = (await window.root.kv.worlds.get("index")) || [];
+    if (!idx.some((w) => w.id === "w1")) { idx.push({ id: "w1", name: "Test World" }); await window.root.kv.worlds.set("index", idx); }
+  });
+  await page.reload();
+  await page.waitForSelector("#chars .prow", { timeout: 8000 });
+  const selVal = await page.$eval("#targetWorld", (s) => s.value);
+  if (selVal !== "w1") problems.push("world dropdown did not select w1: " + selVal);
+  const cardRows = await page.$$eval("#chars .prow", (rs) => rs.map((r) => ({ name: r.querySelector(".pname").textContent, btn: r.querySelector("button").textContent })));
+  if (cardRows.length !== 2 || cardRows[0].name !== "Kael" || !/Add as NPC/.test(cardRows[0].btn)) problems.push("card rows wrong: " + JSON.stringify(cardRows));
+  await page.click("#chars .prow button");
+  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Added"), { timeout: 8000 });
+  let world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
+  if (!world || !Array.isArray(world.npcs) || world.npcs.length !== 1) problems.push("card import: world.npcs wrong");
+  const npc = world && world.npcs && world.npcs[0];
+  if (!npc || npc.name !== "Kael" || npc.persona !== "A grim mercenary.\n\nCold, loyal." || npc.extra !== "He owes you a debt.") problems.push("NPC fields wrong: " + JSON.stringify(npc));
+  if (!npc || npc.avatar !== "/thumbnail?type=avatar&file=kael.png") problems.push("NPC avatar wrong: " + (npc && npc.avatar));
+  let reg = await page.evaluate(async () => await window.root.kv.rpg.get("lwImports"));
+  if (!reg || !reg.cards || !reg.cards["kael.png"] || reg.cards["kael.png"].worlds[0].npcName !== "Kael") problems.push("card registry missing: " + JSON.stringify(reg && reg.cards));
+
+  // re-import follows the same link (no duplicate); game-side field survives
+  await page.evaluate(async () => {
+    const w = await window.root.kv.worlds.get("w1");
+    w.npcs[0].race = "greyfolk";
+    await window.root.kv.worlds.set("w1", w);
+  });
+  await page.click("#chars .prow button");
+  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Updated"), { timeout: 8000 });
+  world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
+  if (!world || world.npcs.length !== 1) problems.push("card re-import duplicated the NPC");
+  if (!world || !world.npcs[0] || world.npcs[0].race !== "greyfolk") problems.push("card update clobbered a game-side field (race)");
+
+  // ---- World Info -> lorebook ----
+  await page.waitForSelector("#books .prow", { timeout: 8000 });
+  await page.click("#books .prow button");
+  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Imported 2"), { timeout: 8000 });
+  world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
+  const lb = world && world.lorebook;
+  if (!lb || lb.length !== 2) problems.push("book import entry count wrong: " + (lb && lb.length));
+  const e0 = lb && lb[0], e1 = lb && lb[1];
+  if (!e0 || e0.title !== "eldoria" || e0.activation !== "keywords" || JSON.stringify(e0.keywords) !== JSON.stringify(["eldoria", "wood", "forest"]) || e0.content !== "Eldoria is an old wood.") problems.push("keyword entry wrong: " + JSON.stringify(e0));
+  if (!e1 || e1.title !== "crown" || e1.activation !== "always") problems.push("constant entry wrong: " + JSON.stringify(e1));
+  reg = await page.evaluate(async () => await window.root.kv.rpg.get("lwImports"));
+  if (!reg || !reg.books || !reg.books.b1 || reg.books.b1.worlds[0].worldId !== "w1") problems.push("book registry missing");
+
+  // book Update: re-fetch replaces (no duplicates), removal + re-add by title
+  await page.click("#books .prow button");
+  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Updated"), { timeout: 8000 });
+  world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
+  if (!world || !world.lorebook || world.lorebook.length !== 2) problems.push("book update duplicated entries: " + (world && world.lorebook && world.lorebook.length));
 
   await browser.close();
   srv.close();

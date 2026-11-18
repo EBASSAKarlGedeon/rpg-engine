@@ -95,7 +95,9 @@
   // Session CSRF token: Loreweaver issues one per session at /csrf-token and
   // requires it as the X-CSRF-Token header on every POST.
   let tokenPromise = null;
-  const getToken = () => {
+  // Force a fresh CSRF token (session may have rotated; the old cached one 403s).
+  const getToken = (fresh) => {
+    if (fresh) tokenPromise = null;
     if (!tokenPromise) {
       tokenPromise = fetch(new URL("/csrf-token", location.origin), { credentials: "include" })
         .then((r) => { if (!r.ok) throw new Error("/csrf-token returned " + r.status); return r.json(); })
@@ -108,6 +110,22 @@
   // ---- Loreweaver connection profiles + presets (from /api/settings/get, cached) ----
   let settingsPromise = null;
   let settingsAt = 0;
+  // Generic same-origin POST to a Loreweaver API path with session CSRF (+ one 403 retry).
+  // Used by the import page for characters / worldinfo endpoints.
+  async function api(path, body) {
+    const call = async (token) => fetch(new URL(path, location.origin), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
+      body: JSON.stringify(body || {}),
+    });
+    let r = await call(await getToken());
+    if (r.status === 403) r = await call(await getToken(true)); // session may have rotated
+    if (!r.ok) throw new Error(path + " returned " + r.status);
+    const text = await r.text();
+    try { return JSON.parse(text); } catch (e) { return text; }
+  }
+
   async function getLoreweaverSettings() {
     if (settingsPromise && Date.now() - settingsAt < SETTINGS_TTL) return settingsPromise;
     settingsAt = Date.now();
@@ -227,6 +245,7 @@
   window.LoreweaverBridge = {
     read: readCfg, write: writeCfg, isEnabled, bridgeFetch, BRIDGE_PATH,
     getSettings: getLoreweaverSettings,
+    api,
     ROLE_IDS, ROLE_LABELS,
   };
 })();
