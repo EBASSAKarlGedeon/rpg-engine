@@ -23,6 +23,7 @@
   .pstatus { font-size: 12px; color: #8a8070; }
   .pstatus.st-ok { color: #7bd07b; }
   .pstatus.st-changed { color: #e0b060; }
+  .pbtns { display: flex; gap: 8px; flex: none; }
   button { padding: 8px 14px; background: #1a1a18; border: 1px solid #8b9a6e; color: #8b9a6e; font: inherit; cursor: pointer; border-radius: 2px; flex: none; }
   button.secondary { border-color: #3a3528; color: #e0d6b8; }
   button:disabled { opacity: .45; cursor: default; }
@@ -167,7 +168,7 @@
     return { created: !existing };
   }
 
-  // ---- character cards -> world NPCs ----
+  // ---- character cards -> world NPCs / standalone worlds ----
   function cardHash(c) { return fnv1a([c.description, c.personality, c.scenario].join("\u0000")); }
 
   // World Info change detection: the /list endpoint returns no content, so the registry hash is
@@ -188,17 +189,82 @@
     };
   }
 
+  // A rules-carrying card (description = GM directives) plus its embedded character_book
+  // is really a mini-world. This turns one into lorebook entries: the rules text as an
+  // always-on "law" entry, the book's cast as "character" entries with their keywords.
+  function buildCardLore(card) {
+    const lore = [];
+    const titles = [];
+    const rules = [card.description, card.personality, card.scenario]
+      .map(function (s) { return String(s || "").trim(); }).filter(Boolean).join("\n\n");
+    if (rules) { lore.push({ title: "Rules", type: "law", activation: "always", keywords: [], content: rules }); titles.push("Rules"); }
+    const book = (card.data && card.data.character_book) || card.character_book || null;
+    const entries = book && Array.isArray(book.entries) ? book.entries : [];
+    for (const e of entries) {
+      if (!e || e.enabled === false) continue;
+      const content = String(e.content || "").trim();
+      if (!content) continue;
+      const kw = [].concat(Array.isArray(e.keys) ? e.keys : [], Array.isArray(e.key) ? e.key : [], Array.isArray(e.secondary_keys) ? e.secondary_keys : [])
+        .map(function (s) { return String(s || "").trim(); }).filter(Boolean);
+      const title = String(e.comment || "").trim() || (kw[0] ? kw[0] : "");
+      lore.push({
+        title: title,
+        type: "character",
+        activation: e.constant === true || String(e.constant) === "true" ? "always" : (kw.length ? "keywords" : "always"),
+        keywords: kw,
+        content: content
+      });
+      titles.push(title);
+    }
+    return { lore: lore, titles: titles };
+  }
+
+  function slugifyWorldName(name) {
+    let x = String(name || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/g, "");
+    return x || "world";
+  }
+
+  async function freshWorldId(name, idx) {
+    const base = slugifyWorldName(name);
+    const taken = new Set(idx.map(function (w) { return w.id; }));
+    if (!taken.has(base)) return base;
+    for (let n = 2; ; n++) {
+      const tail = "-" + n;
+      const cand = (base.length + tail.length > 40) ? base.slice(0, 40 - tail.length) + tail : base + tail;
+      if (!taken.has(cand)) return cand;
+    }
+  }
+
+  // Re-import of a world-form import: replace exactly the entries we imported (by title)
+  // with fresh ones — game-side additions and edits to other entries are untouched.
+  async function refreshWorldImport(card, w) {
+    const raw = await loadWorldRaw(w.worldId);
+    if (!raw) return;
+    const fresh = buildCardLore(card);
+    const titles = new Set((w.titles || []).map(function (t) { return String(t || "").toLowerCase(); }));
+    raw.lorebook = Array.isArray(raw.lorebook) ? raw.lorebook : [];
+    raw.lorebook = raw.lorebook.filter(function (e) {
+      const t = e && typeof e === "object" ? String(e.title || "").toLowerCase() : null;
+      return t === null || !titles.has(t);
+    });
+    raw.lorebook.push(...fresh.lore);
+    await window.root.kv.worlds.set(w.worldId, raw);
+    w.titles = fresh.titles;
+  }
+
   async function importCardToWorld(card, worldId) {
     const raw = await loadWorldRaw(worldId);
     if (!raw) throw new Error("world not found");
-    raw.npcs = Array.isArray(raw.npcs) ? raw.npcs : [];
     const npc = buildNpcFromCard(card);
     if (!npc.name) throw new Error("card has no name");
     const reg = await regRead();
     const prev = reg.cards[card.avatar];
+    let updated = 0;
     if (prev) {
-      // update every world this card was imported into (usually one); follow renames
+      // update every NPC import (follow renames) and every world import
       for (const w of prev.worlds) {
+        if (w.asWorld) { await refreshWorldImport(card, w); updated++; continue; }
         const wr = await loadWorldRaw(w.worldId);
         if (!wr || !Array.isArray(wr.npcs)) continue;
         const i = wr.npcs.findIndex(function (n) { return n && n.name === w.npcName; });
@@ -210,23 +276,62 @@
         wr.npcs[i].name = npc.name;
         w.npcName = npc.name;
         await window.root.kv.worlds.set(w.worldId, wr);
+        updated++;
       }
-      await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: prev.worlds });
-      return { updated: true, count: prev.worlds.length };
     }
-    // fresh import: avoid a name collision with an existing world NPC
-    let targetName = npc.name;
-    const base = npc.name; let n = 2;
-    while (raw.npcs.some(function (x) { return x && String(x.name || "").toLowerCase() === targetName.toLowerCase(); })) {
-      targetName = base + " (" + (n++) + ")";
+    const worlds = prev ? prev.worlds || [] : [];
+    const inThisWorld = worlds.some(function (w) { return !w.asWorld && w.worldId === worldId; });
+    if (!inThisWorld) {
+      // fresh NPC import into the picked world: avoid a name collision with an existing world NPC
+      raw.npcs = Array.isArray(raw.npcs) ? raw.npcs : [];
+      let targetName = npc.name;
+      const base = npc.name; let n = 2;
+      while (raw.npcs.some(function (x) { return x && String(x.name || "").toLowerCase() === targetName.toLowerCase(); })) {
+        targetName = base + " (" + (n++) + ")";
+      }
+      npc.name = targetName;
+      raw.npcs.push(npc);
+      await window.root.kv.worlds.set(worldId, raw);
+      worlds.push({ worldId: worldId, npcName: targetName });
+      await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: worlds });
+      return { created: true, name: targetName, updated: updated };
     }
-    npc.name = targetName;
-    raw.npcs.push(npc);
-    await window.root.kv.worlds.set(worldId, raw);
-    const recs = prev ? prev.worlds || [] : [];
-    recs.push({ worldId: worldId, npcName: targetName });
+    await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: worlds });
+    return { updated: true, count: updated };
+  }
+
+  // "Add as world": the card BECOMES a new game world — rules text as an always-on law
+  // entry, embedded book cast as character entries. The game's Worlds list picks it up
+  // through the worlds index.
+  async function importCardAsWorld(card) {
+    const name = String(card.name || "").trim();
+    if (!name) throw new Error("card has no name");
+    const fresh = buildCardLore(card);
+    if (!fresh.lore.length) throw new Error("card has no description and no embedded book to import");
+    let idx = [];
+    try { idx = (await window.root.kv.worlds.get("index")) || []; } catch (e) {}
+    if (!Array.isArray(idx)) idx = [];
+    const id = await freshWorldId(name, idx);
+    const now = new Date().toISOString();
+    const world = {
+      format: "mno-world", version: 1,
+      meta: { id: id, name: name, description: "", author: "", authorId: "", tags: [], nsfw: false, commentsOff: false, cover: "", authorNotes: "", createdAt: now, updatedAt: now },
+      narrativeVibe: "",
+      lorebook: fresh.lore,
+      scenario: "", start: "", startMode: "prompt",
+      imageStyleTags: "", imageNegativeTags: "",
+      imageIncludeTrackers: false, imageIncludeNpcTrackers: false, imageTrackerKeys: [], imageNpcTrackerKeys: [],
+      stats: { pointsPerLevel: 2, ccBudget: 12, ccFloor: 5, ccCeiling: 20, averageThreshold: 10, exceptionalThreshold: 15, modStep: 5, dieSides: 20, useStatModFormula: false, statModFormula: "", checkIncludeTrackers: false, checkIncludeNpcTrackers: false, checkTrackerKeys: [], checkNpcTrackerKeys: [], useCheckInstruction: false, checkInstruction: "" },
+      trackers: [], npcTrackers: [], npcs: []
+    };
+    await window.root.kv.worlds.set(id, world);
+    if (!idx.some(function (w) { return w.id === id; })) { idx.push({ id: id, name: name }); await window.root.kv.worlds.set("index", idx); }
+    const reg = await regRead();
+    const prev = reg.cards[card.avatar];
+    const recs = prev ? (prev.worlds || []) : [];
+    recs.push({ worldId: id, asWorld: true, titles: fresh.titles });
     await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: recs });
-    return { created: true, name: targetName };
+    return { created: true, worldId: id, name: name };
   }
 
   // ---- World Info -> world lorebook ----
@@ -450,12 +555,18 @@
     cardList.forEach(function (c) {
       const linked = reg.cards[c.avatar];
       const inWorld = linked && linked.worlds.some(function (w) { return w.worldId === worldId; });
+      const asWorld = (linked && linked.worlds.filter(function (w) { return w.asWorld; })) || [];
       let st, btn;
       if (inWorld) {
         st = linked.hash !== cardHash(c)
-          ? { cls: "st-changed", text: "linked → NPC in this world — source changed, update" }
-          : { cls: "st-ok", text: "linked → NPC in this world — up to date" };
+          ? { cls: "st-changed", text: "linked → NPC in this world" + (asWorld.length ? " · also imported as world" : "") + " — source changed, update" }
+          : { cls: "st-ok", text: "linked → NPC in this world" + (asWorld.length ? " · also imported as world" : "") + " — up to date" };
         btn = "Update";
+      } else if (asWorld.length) {
+        st = linked.hash !== cardHash(c)
+          ? { cls: "st-changed", text: "linked → world “" + asWorld.map(function (w) { return w.worldId; }).join(", ") + "” — source changed; update or add as NPC here" }
+          : { cls: "st-ok", text: "linked → world “" + asWorld.map(function (w) { return w.worldId; }).join(", ") + "” — add as NPC here too" };
+        btn = "Add as NPC";
       } else if (linked) {
         st = { cls: "", text: "linked in “" + linked.worlds.map(function (w) { return w.worldId; }).join(", ") + "” — add to this world too" };
         btn = "Add as NPC";
@@ -468,19 +579,36 @@
         '<div class="pmain"><span class="pname">' + esc(c.name || "(unnamed)") + "</span>" +
         '<div class="pdesc">' + esc(String(c.description || "").slice(0, 140)) + "</div>" +
         '<div class="pstatus ' + st.cls + '">' + st.text + "</div></div>" +
-        '<button>' + btn + "</button>");
-      div.querySelector("button").onclick = async function () {
+        '<div class="pbtns"><button>' + btn + "</button><button class=\"secondary\" title=\"Creates a NEW game world from this card: the description as always-on rules, its embedded lorebook as the cast.\">Add as world</button></div>");
+      const buttons = div.querySelectorAll("button");
+      buttons[0].onclick = async function () {
         this.disabled = true; this.textContent = "…";
         try {
           const full = await window.LoreweaverBridge.api("/api/characters/get", { avatar_url: c.avatar });
           const card = (full && typeof full === "object" && full.name !== undefined) ? full : c;
           const r = await importCardToWorld(card, worldId);
-          say(r.updated ? "Updated the linked NPC (" + r.count + " world(s))."
-                        : "Added “" + esc(r.name) + "” as an NPC.", "ok");
+          say(r.created ? (r.updated ? "Added “" + esc(r.name) + "” as an NPC (other linked imports refreshed)."
+                                     : "Added “" + esc(r.name) + "” as an NPC.")
+                        : "Updated the linked imports (" + r.count + ").", "ok");
           await renderChars();
         } catch (e) {
           say("Import failed: " + (e && e.message || e), "bad");
           this.disabled = false; this.textContent = btn;
+        }
+      };
+      buttons[1].onclick = async function () {
+        this.disabled = true; this.textContent = "…";
+        try {
+          const full = await window.LoreweaverBridge.api("/api/characters/get", { avatar_url: c.avatar });
+          const card = (full && typeof full === "object" && full.name !== undefined) ? full : c;
+          const r = await importCardAsWorld(card);
+          localStorage.setItem("rpge.importWorld", r.worldId);
+          await loadWorlds();
+          say("Created world “" + esc(r.name) + "” from the card (" + r.worldId + ") — rules and lorebook are in; it's now the target world. Open it from the game's Worlds list.", "ok");
+          await renderChars();
+        } catch (e) {
+          say("Import failed: " + (e && e.message || e), "bad");
+          this.disabled = false; this.textContent = "Add as world";
         }
       };
       box.appendChild(div);

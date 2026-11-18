@@ -5,6 +5,8 @@
 //   - re-import does not duplicate (updates the linked hero),
 //   - a changed source description is detected and the Update overwrites only imported fields,
 //   - character cards land as world NPCs (persona/extra/avatar + lwImports registry),
+//   - "Add as world" turns a card into a NEW game world (rules -> always-on law entry,
+//     embedded character_book -> character entries, world index + registry updated),
 //   - World Info books land as lorebook entries (keywords merged, constant -> always, disabled skipped).
 //   node tools/check-imports.js
 // (starts a combined static + mock-Loreweaver server on 8768 — same origin, like production)
@@ -69,6 +71,12 @@ const srv = http.createServer((req, res) => {
   // ---- characters + World Info mocks ----
   const cards = [
     { name: "Kael", avatar: "kael.png", description: "A grim mercenary.", personality: "Cold, loyal.", scenario: "He owes you a debt." },
+    { name: "Rulesville", avatar: "rules.png", description: "<SYSTEM DIRECTIVE: RULES ENGINE> Be fair.", personality: "", scenario: "The town has secrets.",
+      data: { character_book: { entries: [
+        { keys: ["Anna"], secondary_keys: [], comment: "Anna", content: "Anna runs the inn.", constant: false, enabled: true },
+        { keys: [], secondary_keys: [], comment: "Town charter", content: "The charter is always in force.", constant: true, enabled: true },
+        { keys: ["gone"], comment: "gone", content: "Disabled entry.", enabled: false },
+      ] } } },
     { name: "Vex", avatar: "vex.png", description: "A sly fixer.", personality: "Charming.", scenario: "She knows everyone." },
   ];
   if (url.pathname === "/api/characters/all" && req.method === "POST") {
@@ -199,8 +207,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.waitForSelector("#chars .prow", { timeout: 8000 });
   const selVal = await page.$eval("#targetWorld", (s) => s.value);
   if (selVal !== "w1") problems.push("world dropdown did not select w1: " + selVal);
-  const cardRows = await page.$$eval("#chars .prow", (rs) => rs.map((r) => ({ name: r.querySelector(".pname").textContent, btn: r.querySelector("button").textContent })));
-  if (cardRows.length !== 2 || cardRows[0].name !== "Kael" || !/Add as NPC/.test(cardRows[0].btn)) problems.push("card rows wrong: " + JSON.stringify(cardRows));
+  const cardRows = await page.$$eval("#chars .prow", (rs) => rs.map((r) => ({ name: r.querySelector(".pname").textContent, btn: r.querySelector("button").textContent, btns: r.querySelectorAll("button").length })));
+  if (cardRows.length !== 3 || cardRows[0].name !== "Kael" || !/Add as NPC/.test(cardRows[0].btn)) problems.push("card rows wrong: " + JSON.stringify(cardRows));
+  if (cardRows.some((r) => r.btns !== 2)) problems.push("card rows should have 2 buttons (NPC + world): " + JSON.stringify(cardRows));
   await page.click("#chars .prow button");
   await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Added"), { timeout: 8000 });
   let world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
@@ -222,6 +231,49 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
   if (!world || world.npcs.length !== 1) problems.push("card re-import duplicated the NPC");
   if (!world || !world.npcs[0] || world.npcs[0].race !== "greyfolk") problems.push("card update clobbered a game-side field (race)");
+
+  // ---- card -> standalone world ("Add as world") ----
+  // Rulesville row is the 2nd card row (sorted Kael, Rulesville, Vex); its second button.
+  await page.click("#chars .prow:nth-of-type(3) button.secondary");
+  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Created world"), { timeout: 8000 });
+  const rw = await page.evaluate(async () => await window.root.kv.worlds.get("rulesville"));
+  if (!rw || rw.format !== "mno-world" || rw.version !== 1) problems.push("card-world: file form wrong: " + JSON.stringify(rw && { format: rw && rw.format, version: rw && rw.version }));
+  if (!rw || !rw.meta || rw.meta.name !== "Rulesville" || rw.meta.id !== "rulesville") problems.push("card-world: meta wrong: " + JSON.stringify(rw && rw.meta));
+  if (!rw || !Array.isArray(rw.lorebook) || rw.lorebook.length !== 3) problems.push("card-world: lorebook count wrong: " + (rw && rw.lorebook && rw.lorebook.length));
+  const rl = (rw && rw.lorebook) || [];
+  if (!rl[0] || rl[0].title !== "Rules" || rl[0].type !== "law" || rl[0].activation !== "always" || rl[0].content !== "<SYSTEM DIRECTIVE: RULES ENGINE> Be fair.\n\nThe town has secrets.") problems.push("card-world: rules entry wrong: " + JSON.stringify(rl[0]));
+  if (!rl[1] || rl[1].title !== "Anna" || rl[1].type !== "character" || rl[1].activation !== "keywords" || JSON.stringify(rl[1].keywords) !== JSON.stringify(["Anna"]) || rl[1].content !== "Anna runs the inn.") problems.push("card-world: keyword cast entry wrong: " + JSON.stringify(rl[1]));
+  if (!rl[2] || rl[2].title !== "Town charter" || rl[2].activation !== "always" || rl[2].content !== "The charter is always in force.") problems.push("card-world: constant cast entry wrong: " + JSON.stringify(rl[2]));
+  if (rw && (rw.npcs.length !== 0 || rw.trackers.length !== 0)) problems.push("card-world: npcs/trackers should be empty");
+  const idx2 = await page.evaluate(async () => await window.root.kv.worlds.get("index"));
+  if (!idx2 || !idx2.some((w) => w.id === "rulesville" && w.name === "Rulesville")) problems.push("card-world: index not updated: " + JSON.stringify(idx2));
+  reg = await page.evaluate(async () => await window.root.kv.rpg.get("lwImports"));
+  const rwReg = reg && reg.cards && reg.cards["rules.png"];
+  if (!rwReg || !rwReg.worlds[0] || rwReg.worlds[0].worldId !== "rulesville" || rwReg.worlds[0].asWorld !== true || JSON.stringify(rwReg.worlds[0].titles) !== JSON.stringify(["Rules", "Anna", "Town charter"])) problems.push("card-world: registry wrong: " + JSON.stringify(rwReg));
+  const selAfter = await page.$eval("#targetWorld", (s) => s.value);
+  if (selAfter !== "rulesville") problems.push("card-world: target world did not switch to the new world: " + selAfter);
+
+  // mixed update: with target back on w1, "Add as NPC" adds the NPC there AND refreshes the world import (no dup)
+  await page.evaluate(() => localStorage.setItem("rpge.importWorld", "w1"));
+  await page.reload();
+  await page.waitForSelector("#chars .prow", { timeout: 8000 });
+  const selBack = await page.$eval("#targetWorld", (s) => s.value);
+  if (selBack !== "w1") problems.push("remembered world selection broken: " + selBack);
+  const rvRow = await page.$$eval("#chars .prow", (rs) => rs.findIndex((r) => r.querySelector(".pname").textContent === "Rulesville"));
+  if (rvRow < 0) problems.push("Rulesville row missing after reload");
+  await page.evaluate((i) => { document.querySelectorAll("#chars .prow")[i].querySelector("button").click(); }, rvRow);
+  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Added"), { timeout: 8000 });
+  world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
+  if (!world || !world.npcs.some((n) => n && n.name === "Rulesville" && n.persona === "<SYSTEM DIRECTIVE: RULES ENGINE> Be fair.")) problems.push("card-world: NPC not added to w1 on mixed update");
+  const rwAfter = await page.evaluate(async () => await window.root.kv.worlds.get("rulesville"));
+  if (!rwAfter || rwAfter.lorebook.length !== 3) problems.push("card-world: update duplicated world lorebook: " + (rwAfter && rwAfter.lorebook.length));
+
+  // a card WITHOUT an embedded book still becomes a world (rules only)
+  await page.evaluate((i) => { document.querySelectorAll("#chars .prow")[i].querySelector("button.secondary").click(); }, rvRow === 0 ? 1 : 0); // Kael row's world button
+  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Created world"), { timeout: 8000 });
+  const kw = await page.evaluate(async () => await window.root.kv.worlds.get("kael"));
+  if (!kw || !kw.meta || kw.meta.name !== "Kael") problems.push("card-world (no book): world missing: " + JSON.stringify(kw && kw.meta));
+  if (!kw || kw.lorebook.length !== 1 || kw.lorebook[0].title !== "Rules" || kw.lorebook[0].content !== "A grim mercenary.\n\nCold, loyal.\n\nHe owes you a debt.") problems.push("card-world (no book): rules entry wrong: " + JSON.stringify(kw && kw.lorebook));
 
   // ---- World Info -> lorebook ----
   await page.waitForSelector("#books .prow", { timeout: 8000 });
