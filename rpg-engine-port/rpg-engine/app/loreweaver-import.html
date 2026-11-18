@@ -258,6 +258,11 @@
     if (!lore.length) throw new Error("book has no enabled entries with content");
     const raw = await loadWorldRaw(worldId);
     if (!raw) throw new Error("world not found");
+    // legacy worlds may store the lorebook as one plain-text string — fold it into array form
+    // BEFORE appending, or the initialization below would wipe it
+    if (typeof raw.lorebook === "string" && raw.lorebook.trim()) {
+      raw.lorebook = [{ title: "", type: "world", activation: "always", keywords: [], content: raw.lorebook.trim() }];
+    }
     raw.lorebook = Array.isArray(raw.lorebook) ? raw.lorebook : [];
     const reg = await regRead();
     const prev = reg.books[book.file_id];
