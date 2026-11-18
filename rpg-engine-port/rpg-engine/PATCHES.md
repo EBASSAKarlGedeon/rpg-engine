@@ -87,3 +87,37 @@ appears on next page load as before.
 **Impact when bridge is off:** none — the event only fires on the channel message.
 
 **Revert:** delete the `window.addEventListener` line (and optionally the shim block).
+
+---
+
+## [rpge-patch 004] `worldDescription` — a first-class always-canon world field (v2.6 mapping)
+
+**Files:** `src/scripts/world.js`, `src/scripts/rp-engine.js`, `src/scripts/world-editor.js`, `src/scripts/context-budget.js` (one param each), plus our `app/loreweaver-import.html` (not a patch).
+
+**Why (user decision 2026-11-18):** "Add as world" collapsed card description+personality+scenario
+into one always-on law entry — wrong scope, bloated every prompt. A card's description/personality
+is **world canon**, so it gets its own field instead of pretending to be lore.
+
+**Change:**
+- `world.js`: `normalizeWorld`/`worldToFile` carry `worldDescription: str(obj.worldDescription)`.
+  `WORLD_VERSION` stays 1 — optional field: old engine + new file silently drops it (canonical
+  builder whitelist, no error); new engine + old world reads empty. That IS the backwards compat.
+- `rp-engine.js`: constructor `worldDescriptionText`; `buildContext` injects, after NARRATIVE VIBE
+  and before WORLD PREMISE: `"WORLD DESCRIPTION (always true — canon about the world and its people):\n" + sub(...)`. GM-only (not in map/NPC digests).
+- `context-budget.js` measurement factory passes it too (token accounting honest).
+- `world-editor.js` Story tab: "Description" textarea (`#ceWDesc`, both single- and multi-start
+  paths), tip distinguishes it from the Basics tab's Description (= `meta.description`, UI-only).
+- Import v2.6 (our import page): description+personality → `worldDescription`; scenario →
+  `world.scenario`; `first_mes` → opening 1 + `alternate_greetings` → openings 2..N (verbatim,
+  auto-titled "Greeting N"); `system_prompt` → `narrativeVibe`; `creator_notes` →
+  `meta.authorNotes`; `tags` → `meta.tags` with `nsfw` → `meta.nsfw`; dropped (no slot):
+  `mes_example`, `post_history_instructions`, `depth_prompt`, `talkativeness`, `regex_scripts`.
+  The auto "Rules" law entry is gone. Update migrates old imports: strips an always-law titled
+  "Rules" with no keywords, overwrites story/scenario (only with fresh content), appends
+  system_prompt to vibe with `\n\n---\n\n`, replaces previously imported openings (ids tracked in
+  the registry record as `startIds`; custom + game-side openings survive).
+
+**Impact when bridge is off:** none — it's core schema/prompt behavior; worlds without the field behave as before.
+
+**Revert:** remove the `worldDescription` lines in world.js (2), rp-engine.js (2), context-budget.js,
+world-editor.js (3 lines + the textarea in 2 templates); import page falls back to v2.5 mapping by history.
