@@ -6,6 +6,9 @@
 <title>RPG Engine - Import from Loreweaver</title>
 <script src="shims/perchance-shim.js"></script>
 <script src="shims/loreweaver-bridge.js"></script>
+<!-- server-side saves: the import page's kv writes (worlds, registry) mirror to the Loreweaver
+     server immediately, so other devices see an import without this browser reloading the game -->
+<script src="shims/loreweaver-storage.js"></script>
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; background: #11100e; color: #e0d6b8; font: 16px/1.5 system-ui, "Segoe UI", sans-serif; }
