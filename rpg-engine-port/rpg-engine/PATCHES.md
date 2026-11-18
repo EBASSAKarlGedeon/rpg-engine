@@ -30,3 +30,29 @@ job (role matrix, bridge v3).
 providers ignore unknown headers. No behaviour change otherwise.
 
 **Revert:** delete both lines and the `, route` arguments.
+
+---
+
+## [rpge-patch 002] World Editor tabs never switch panes (`[hidden]` beaten by display:flex)
+
+**File:** `src/styles.css` (editor section, next to the `.ce-view` rule ~line 2680)
+
+**Why:** the editor hides inactive tab panes by toggling the `hidden` attribute on
+`.ce-view` divs (`world-editor.js showTab`), but the stylesheet sets
+`.ce-view { display: flex }` — an author `display` beats the UA `[hidden]{display:none}`
+rule, so **every pane stays visible**: the initially painted Basics pane never goes away
+and each newly shown pane collapses to height 0 and stacks behind it. Symptom: clicking
+Story/Lorebook/NPC/Stats/… highlights the tab but keeps showing Basics, with fragments of
+other panes overlapping (user report 2026-11-18, browser recording). The codebase's own
+convention elsewhere is explicit `[hidden]` display rules (`.ce-dirty[hidden]`,
+`#tavernFab[hidden]`, …) — this one was simply missing upstream.
+
+**Change (1 rule):**
+
+```css
+.ce-view[hidden] { display: none; }
+```
+
+**Impact when reverted:** editor tabs visually break for every world (not world-specific).
+
+**Revert:** delete the rule.
