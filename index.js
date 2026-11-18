@@ -6,6 +6,9 @@ import { saveSettingsDebounced } from "../../../../script.js";
 const extensionName = "rpg-engine";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
+// The full game app lives inside the port folder. Its own wrapper (rpg-engine-port/rpg-engine/index.js)
+// adds the floating ⚔ launcher + wand-menu entry + full-screen overlay, and exposes window.rpgEngine.
+
 const defaultSettings = {
     enabled: false
 };
@@ -26,12 +29,21 @@ function onCheckboxChange(event) {
 }
 
 function onButtonClick() {
-    const isEnabled = extension_settings[extensionName].enabled;
-    toastr.info(
-        `RPG Engine is ${isEnabled ? "enabled" : "disabled"}`,
-        "RPG Engine"
-    );
-    console.log(`[${extensionName}] Button clicked`);
+    // Launch the game instead of just reporting status.
+    const app = window.rpgEngine;
+    if (app && typeof app.open === "function") {
+        toastr.info("Opening the RPG Engine…", "RPG Engine");
+        app.open();
+    } else {
+        toastr.error("The game app did not load — see the browser console.", "RPG Engine");
+        console.error(`[${extensionName}] window.rpgEngine is missing; the port wrapper failed to load.`);
+    }
+}
+
+function onBridgeClick() {
+    // Open the Loreweaver bridge settings page in a new window (same session, same origin).
+    const base = new URL("./rpg-engine-port/rpg-engine/", import.meta.url).href;
+    window.open(base + "app/loreweaver-bridge.html", "rpge-bridge", "width=760,height=980");
 }
 
 // Extension initialization
@@ -48,7 +60,13 @@ jQuery(async () => {
         // Bind events and load saved settings
         $("#rpg_engine_checkbox").on("input", onCheckboxChange);
         $("#rpg_engine_button").on("click", onButtonClick);
+        $("#rpg_engine_bridge").on("click", onBridgeClick);
         loadSettings();
+
+        // Load the game wrapper (overlay + ⚔ launcher + wand-menu entry).
+        import(new URL("./rpg-engine-port/rpg-engine/index.js", import.meta.url).href)
+            .then(() => console.log(`[${extensionName}] 🎮 game wrapper loaded`))
+            .catch((error) => console.error(`[${extensionName}] ❌ game wrapper failed:`, error));
 
         console.log(`[${extensionName}] ✅ Loaded successfully`);
     } catch (error) {
