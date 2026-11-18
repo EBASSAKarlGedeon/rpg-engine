@@ -130,7 +130,7 @@
         names.forEach((name, i) => {
           try { presets[name] = typeof raw[i] === "string" ? JSON.parse(raw[i]) : raw[i]; } catch (e) {}
         });
-        return { profiles, selectedProfile: cm.selectedProfile || null, presets, settings: data.settings || {} };
+        return { profiles, selectedProfile: cm.selectedProfile || null, presets, settings: data.settings || {}, parsed: settings || {} };
       })
       .catch((e) => { settingsPromise = null; throw e; });
     return settingsPromise;

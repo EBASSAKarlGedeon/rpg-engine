@@ -6,12 +6,59 @@ import { saveSettingsDebounced } from "../../../../script.js";
 const extensionName = "rpg-engine";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
-// Same-window overlay state for the Loreweaver bridge page (see onBridgeClick).
-const bridgeUi = { root: null, frame: null };
-
+// Same-window overlay pages (bridge / imports), like the game — no new Electron BrowserWindow
+// renderer spawn, so no window-creation delay. Same origin, so they see the session.
 // The full game app lives inside the port folder. Its own wrapper (rpg-engine-port/rpg-engine/index.js)
 // adds the floating ⚔ launcher + wand-menu entry + full-screen overlay, and exposes window.rpgEngine.
 
+const PAGE_URLS = {
+    bridge: new URL("./rpg-engine-port/rpg-engine/app/loreweaver-bridge.html", import.meta.url).href,
+    imports: new URL("./rpg-engine-port/rpg-engine/app/loreweaver-import.html", import.meta.url).href,
+};
+const PAGE_TITLES = { bridge: "LOREWEAVER BRIDGE", imports: "LOREWEAVER IMPORTS" };
+const overlayPages = {};
+
+// One overlay per page id: {root, frame}. Reuses the game-overlay pattern (iframe in a bar'd
+// root, hidden not removed, so state survives close/open).
+function makeOverlayPage(id) {
+    const root = document.createElement("div");
+    root.id = "rpge-page-" + id;
+    root.hidden = true;
+    const bar = document.createElement("div");
+    bar.className = "rpge-bridge-bar";
+    const t = document.createElement("span");
+    t.className = "rpge-bridge-title";
+    t.textContent = PAGE_TITLES[id];
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "rpge-bridge-close";
+    close.textContent = "Close ✕";
+    close.setAttribute("aria-label", "Close " + PAGE_TITLES[id]);
+    close.addEventListener("click", () => closeOverlayPage(id));
+    bar.append(t, close);
+    const frame = document.createElement("iframe");
+    frame.id = "rpge-page-frame-" + id;
+    frame.title = PAGE_TITLES[id];
+    root.append(bar, frame);
+    document.body.appendChild(root);
+    return { root, frame, url: PAGE_URLS[id] };
+}
+
+function openOverlayPage(id) {
+    const page = overlayPages[id] || (overlayPages[id] = makeOverlayPage(id));
+    if (!page.frame.getAttribute("src")) page.frame.setAttribute("src", page.url); // lazy load
+    page.root.hidden = false;
+    document.documentElement.classList.add("rpge-bridge-open");
+}
+
+function closeOverlayPage(id) {
+    const page = overlayPages[id];
+    if (!page) return;
+    page.root.hidden = true; // keep the iframe alive
+    document.documentElement.classList.remove("rpge-bridge-open");
+}
+
+function onPageClick(id) { return () => openOverlayPage(id); }
 const defaultSettings = {
     enabled: false
 };
@@ -44,44 +91,11 @@ function onButtonClick() {
 }
 
 function onBridgeClick() {
-    // Open the bridge page in a same-window overlay (iframe), like the game — no
-    // new Electron BrowserWindow / renderer spawn, so there is no window-creation
-    // delay. Same origin, so the bridge page still sees the session + localStorage.
-    const base = new URL("./rpg-engine-port/rpg-engine/", import.meta.url).href;
-    const url = base + "app/loreweaver-bridge.html";
-    if (!bridgeUi.root) {
-        const root = document.createElement("div");
-        root.id = "rpge-bridge-root";
-        root.hidden = true;
-        const bar = document.createElement("div");
-        bar.className = "rpge-bridge-bar";
-        const title = document.createElement("span");
-        title.className = "rpge-bridge-title";
-        title.textContent = "LOREWEAVER BRIDGE";
-        const close = document.createElement("button");
-        close.type = "button";
-        close.className = "rpge-bridge-close";
-        close.textContent = "Close ✕";
-        close.setAttribute("aria-label", "Close Loreweaver bridge");
-        close.addEventListener("click", closeBridgeOverlay);
-        bar.append(title, close);
-        const frame = document.createElement("iframe");
-        frame.id = "rpge-bridge-frame";
-        frame.title = "Loreweaver bridge";
-        root.append(bar, frame);
-        document.body.appendChild(root);
-        bridgeUi.root = root;
-        bridgeUi.frame = frame;
-    }
-    if (!bridgeUi.frame.getAttribute("src")) bridgeUi.frame.setAttribute("src", url); // lazy load
-    bridgeUi.root.hidden = false;
-    document.documentElement.classList.add("rpge-bridge-open");
+    openOverlayPage("bridge");
 }
 
-function closeBridgeOverlay() {
-    if (!bridgeUi.root) return;
-    bridgeUi.root.hidden = true; // keep the iframe alive
-    document.documentElement.classList.remove("rpge-bridge-open");
+function onImportClick() {
+    openOverlayPage("imports");
 }
 
 // Extension initialization
@@ -99,9 +113,14 @@ jQuery(async () => {
         $("#rpg_engine_checkbox").on("input", onCheckboxChange);
         $("#rpg_engine_button").on("click", onButtonClick);
         $("#rpg_engine_bridge").on("click", onBridgeClick);
-        // Escape closes the bridge overlay (the game overlay has its own Close button).
+        $("#rpg_engine_import").on("click", onImportClick);
+        // Escape closes any open page overlay (the game overlay has its own Close button).
         document.addEventListener("keydown", (e) => {
-            if (e.key === "Escape" && bridgeUi.root && !bridgeUi.root.hidden) closeBridgeOverlay();
+            if (e.key !== "Escape") return;
+            for (const id of Object.keys(overlayPages)) {
+                const p = overlayPages[id];
+                if (p && p.root && !p.root.hidden) { closeOverlayPage(id); break; }
+            }
         });
         loadSettings();
 
