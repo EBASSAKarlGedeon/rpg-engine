@@ -121,3 +121,49 @@ is **world canon**, so it gets its own field instead of pretending to be lore.
 
 **Revert:** remove the `worldDescription` lines in world.js (2), rp-engine.js (2), context-budget.js,
 world-editor.js (3 lines + the textarea in 2 templates); import page falls back to v2.5 mapping by history.
+
+## [rpge-patch 005] OP-MC free-build features (free stats, tracker overrides/modes, powers, mid-game edit, no-crit-fail)
+
+**Files:** `src/scripts/character.js`, `src/scripts/main.js`, `src/scripts/trackers.js`,
+`src/scripts/rp-engine.js`, `src/scripts/stats.js`, `src/styles.css`.
+
+**Why (user decision 2026-11-18, answered 7 plan questions):** the point of the port — support
+overpowered player characters: no point budget, hand-set tracker starts, per-tracker
+locked/unlimited modes, a free-text powers sheet the GM always knows, mid-game stat/tracker
+editing, and an optional no-critical-failure rule. All per-hero, off by default.
+
+**Change:**
+- `character.js`: `defaultCharacter()` gains optional fields — `freeBuild`, `powers`,
+  `trackerOverrides` (world-opening shape), `trackerModes` (`{key:"locked"|"unlimited"}`),
+  `freeEdit`, `noCritFail`; `characterSheet` emits a `Powers & abilities` block after stats.
+  `initCharacterStats` (main.js) normalizes them at load (booleans/string; overrides restricted
+  to finite numbers on known tracker keys; modes restricted to `locked`/`unlimited` on known keys).
+- Wizard: Stats step gains a **Free build** checkbox (ignores `ccBudget` + `ccCeiling`; a stat is
+  capped only by its own world `max`, and a world without one is unlimited); a **Trackers step**
+  (worlds with number trackers only) lists Start/Max inputs seeded from `initialTrackers` +
+  the opening's own `trackerOverrides`, with a Normal/🔒Locked/∞Unlimited select per tracker; the
+  Review step gains a **Powers & abilities** textarea and a **No critical failures** checkbox.
+  All of it persists through the wizard draft and onto the hero at Begin. The hero's
+  `trackerOverrides` merge OVER the opening's (hero wins) when seeding `s.initialTrackers`.
+- `trackers.js`: `applyTrackerModes(snap, defs, modes, current, stats)` — applied AFTER the
+  tracker call's parse (and the chat-side editor path): locked = value restored to the pre-turn
+  snapshot; unlimited = number trackers re-filled to their live max (formula caps keep working).
+  GM context annotated: `trackerValueLines`/`buildTrackerValuesContext` get a `modes` arg
+  ("LOCKED: never changes" / "UNLIMITED: never depletes"); `buildTrackerContext` gets hard
+  instructions for the tracker call.
+- `rp-engine.js`: passes `state.character.trackerModes` into both context builders and applies
+  `applyTrackerModes` in `updateTrackers` after `parseTrackerBlock`.
+- Hero panel: a ✎ **free-edit** toggle (always visible, gold while on) — stats keep −/+ outside
+  level-up windows (raising costs no points), a tracker editor (value/max inputs) appears, and
+  `showSave` follows. `spendStat` handles freeEdit. `applyManualTrackerEdit` rewrites the LATEST
+  `afterTrackers` snapshot (or `initialTrackers`) so the next turn's GM context picks it up.
+  Tracker chips/bars show 🔒/∞ badges.
+- `stats.js`: `resolveCheck(decision, stats, defs, cfg, opts)` — `opts.noCritFail` disables the
+  critical-FAILURE window (worst rolls decided by total vs DC; crit successes stay).
+
+**Impact when bridge is off:** none — all core behavior; heroes without these fields behave exactly as before.
+
+**Revert:** drop the new fields in character.js + their initCharacterStats normalization; wizard
+reverts to ["start","bio","avatar","stats","review"] without the new views/handlers; remove
+`applyTrackerModes` + the `modes` args; hero panel reverts to windowOpen-only editing; resolveCheck
+drops `opts`. (Large surface — easiest to keep.)
