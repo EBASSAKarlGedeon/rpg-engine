@@ -392,6 +392,9 @@ async function init() {
     isBundled: (id) => bundledWorldForId(id),
     openBackupSection: () => openSettingsPanel("backup"),
   });
+  // [rpge-patch 003] external world writes (import page, sync) refresh the Worlds list live —
+  // see PATCHES.md; the storage shim forwards BroadcastChannel("rpge-kv") worlds-changed here.
+  window.addEventListener("rpge-worlds-changed", () => { try { refreshWorldNameCache(); refreshLanding(); } catch (e) { /* optional */ } });
   await reconcileWorldAuthors(); // bring the worlds WE authored up to date with this identity — never fatal
   memory = new MemorySystem(genText);
   npcLife = new NpcLifeSystem(genText);

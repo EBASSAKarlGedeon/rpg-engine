@@ -109,6 +109,25 @@
     });
   }
 
+  // same downscale for world covers, but larger (the Worlds list renders covers ~400px tall)
+  function toCoverDataUrl(url) {
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var MAX = 512, w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+          var s = Math.min(1, MAX / Math.max(w, h));
+          var cv = document.createElement("canvas");
+          cv.width = Math.max(1, Math.round(w * s)); cv.height = Math.max(1, Math.round(h * s));
+          cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+          resolve(cv.toDataURL("image/jpeg", 0.85));
+        } catch (e) { resolve(""); }
+      };
+      img.onerror = function () { resolve(""); };
+      img.src = url;
+    });
+  }
+
   function personaAvatarUrl(id) { return "/User%20Avatars/" + encodeURIComponent(id); }
   function cardThumbUrl(avatar) { return "/thumbnail?type=avatar&file=" + encodeURIComponent(avatar); }
 
@@ -313,9 +332,11 @@
     if (!Array.isArray(idx)) idx = [];
     const id = await freshWorldId(name, idx);
     const now = new Date().toISOString();
+    // the card's image becomes the world cover (downscaled dataURL, travels with the file)
+    const cover = card.avatar ? await toCoverDataUrl(cardThumbUrl(card.avatar)) : "";
     const world = {
       format: "mno-world", version: 1,
-      meta: { id: id, name: name, description: "", author: "", authorId: "", tags: [], nsfw: false, commentsOff: false, cover: "", authorNotes: "", createdAt: now, updatedAt: now },
+      meta: { id: id, name: name, description: "", author: "", authorId: "", tags: [], nsfw: false, commentsOff: false, cover: cover, authorNotes: "", createdAt: now, updatedAt: now },
       narrativeVibe: "",
       lorebook: fresh.lore,
       scenario: "", start: "", startMode: "prompt",
@@ -331,7 +352,15 @@
     const recs = prev ? (prev.worlds || []) : [];
     recs.push({ worldId: id, asWorld: true, titles: fresh.titles });
     await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: recs });
+    notifyGameWorldsChanged();
     return { created: true, worldId: id, name: name };
+  }
+
+  // Tell a running game (open in an overlay/another tab, same origin) that the worlds library
+  // changed so its Worlds list refreshes live — no page reload needed. The storage shim in the
+  // game page listens on this channel and re-renders the list (patch 003 hook).
+  function notifyGameWorldsChanged() {
+    try { new BroadcastChannel("rpge-kv").postMessage({ type: "worlds-changed" }); } catch (e) {}
   }
 
   // ---- World Info -> world lorebook ----

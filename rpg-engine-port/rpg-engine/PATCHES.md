@@ -60,3 +60,30 @@ convention elsewhere is explicit `[hidden]` display rules (`.ce-dirty[hidden]`,
 the AI-split wrapper can never collapse in Lorebook/NPC/Stats/Trackers tabs.
 
 **Revert:** delete both rules.
+
+---
+
+## [rpge-patch 003] Live Worlds-list refresh when a world is written from outside the game
+
+**File:** `src/scripts/main.js` (right after the `initScenarioImport({…})` call, ~line 393)
+
+**Why:** "Add as world" on the import page writes the world into `kv.worlds` from a different
+document (import overlay / another tab). The game's Worlds list only refreshed on its own
+writes (`refreshWorldNameCache` / `refreshLanding` are main.js-internal, no global hook, no
+focus/visibility re-render), so the user had to reload the page to see the new world.
+
+**Change (2 lines):**
+
+```js
+window.addEventListener("rpge-worlds-changed", () => { try { refreshWorldNameCache(); refreshLanding(); } catch (e) { /* optional */ } });
+```
+
+Plus a forwarder in OUR shim `app/shims/loreweaver-storage.js` (not a patch — our file):
+`BroadcastChannel("rpge-kv")` messages of type `worlds-changed` are re-dispatched as the
+window event above. The import page posts that message after "Add as world". Same-origin
+BroadcastChannel crosses overlay iframes and tabs; a missing channel just means the world
+appears on next page load as before.
+
+**Impact when bridge is off:** none — the event only fires on the channel message.
+
+**Revert:** delete the `window.addEventListener` line (and optionally the shim block).

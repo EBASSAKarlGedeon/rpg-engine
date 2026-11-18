@@ -245,6 +245,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!rl[1] || rl[1].title !== "Anna" || rl[1].type !== "character" || rl[1].activation !== "keywords" || JSON.stringify(rl[1].keywords) !== JSON.stringify(["Anna"]) || rl[1].content !== "Anna runs the inn.") problems.push("card-world: keyword cast entry wrong: " + JSON.stringify(rl[1]));
   if (!rl[2] || rl[2].title !== "Town charter" || rl[2].activation !== "always" || rl[2].content !== "The charter is always in force.") problems.push("card-world: constant cast entry wrong: " + JSON.stringify(rl[2]));
   if (rw && (rw.npcs.length !== 0 || rw.trackers.length !== 0)) problems.push("card-world: npcs/trackers should be empty");
+  if (!rw || !rw.meta || !/^data:image\/(jpeg|png);base64,/.test(rw.meta.cover || "")) problems.push("card-world: cover should be the card image as a dataURL: " + JSON.stringify(rw && rw.meta && String(rw.meta.cover).slice(0, 40)));
   const idx2 = await page.evaluate(async () => await window.root.kv.worlds.get("index"));
   if (!idx2 || !idx2.some((w) => w.id === "rulesville" && w.name === "Rulesville")) problems.push("card-world: index not updated: " + JSON.stringify(idx2));
   reg = await page.evaluate(async () => await window.root.kv.rpg.get("lwImports"));

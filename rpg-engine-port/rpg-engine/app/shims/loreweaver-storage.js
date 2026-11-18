@@ -298,4 +298,16 @@
     meta: readMeta,
     reconcileNow: () => (origKvRef ? reconcile(origKvRef) : Promise.reject(new Error("no kv"))),
   };
+
+  // [rpge-patch 003] external world writes: the import page (and future sync) posts on this
+  // channel when the worlds library changes; forward it to the game page so the Worlds list
+  // refreshes live (main.js listens for the "rpge-worlds-changed" window event).
+  try {
+    const bc = new BroadcastChannel("rpge-kv");
+    bc.onmessage = (e) => {
+      if (e && e.data && e.data.type === "worlds-changed") {
+        try { window.dispatchEvent(new Event("rpge-worlds-changed")); } catch (err) {}
+      }
+    };
+  } catch (e) { /* BroadcastChannel unsupported — next page load still sees the world */ }
 })();
