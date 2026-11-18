@@ -82,7 +82,9 @@
     })
       .then((r) => { if (!r.ok) throw new Error("/api/settings/get returned " + r.status); return r.json(); })
       .then((data) => {
-        const es = (data.settings && data.settings.extension_settings) || {};
+        let settings = data.settings;
+        if (typeof settings === "string") { try { settings = JSON.parse(settings); } catch (e) { settings = {}; } }
+        const es = (settings && settings.extension_settings) || {};
         const cm = es.connectionManager || {};
         const profiles = Array.isArray(cm.profiles) ? cm.profiles : [];
         const names = Array.isArray(data.openai_setting_names) ? data.openai_setting_names : [];
