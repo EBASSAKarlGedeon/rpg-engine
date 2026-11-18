@@ -37,9 +37,17 @@
      Streaming works.</p>
   <p class="hint">Status: bridge is <span id="state" class="state">…</span></p>
 
-  <label for="profile">Connection profile</label>
+  <label for="profile">Connection profile (main)</label>
   <select id="profile"><option value="">Loading profiles…</option></select>
   <div id="profileInfo"></div>
+
+  <details id="rolesBox" style="margin-top:18px">
+    <summary style="cursor:pointer;color:#e0d6b8">Per-job profiles (optional)</summary>
+    <p class="hint">Leave a job on <b>(main profile)</b> to use the main profile above. Assign a
+       different profile to a job to run it on that connection instead — e.g. trackers, checks
+       and memories on a cheap model, the GM on your best one.</p>
+    <div id="roles"></div>
+  </details>
 
   <p><label><input type="checkbox" id="usePreset" checked> Use the profile's preset sampling
      (temperature, top&nbsp;p, penalties…) when the game doesn't set its own</label></p>
@@ -54,13 +62,14 @@
 
   <h1 style="margin-top:34px">How it works</h1>
   <ol>
-    <li>The chosen profile decides everything: endpoint URL, model, and API key
+    <li>The main profile decides everything for unrouted calls: endpoint URL, model, and API key
         (its <code>secret-id</code> entry in Loreweaver's server-side key store).</li>
     <li>The game's <b>Settings &gt; AI Model</b> base URL and model are <b>ignored</b> while the
-        bridge is on (its key field can stay anything). Per-call routing (trackers etc. on a cheap
-        second profile) is planned — right now one profile serves all calls.</li>
-    <li>The cheap secondary model (the Perchance AI slot on <code>cheap-model.html</code>) also
-        routes through the same profile while the bridge is on.</li>
+        bridge is on (its key field can stay anything). The game's own per-job toggles
+        (Settings &gt; AI Model &gt; External AI calls) still decide whether a job calls the
+        external provider at all — off falls back to Perchance AI as before.</li>
+    <li>The cheap secondary model (<code>cheap-model.html</code>) is its own row in the
+        per-job list; leave it on the main profile or give it its own cheap connection.</li>
   </ol>
   <p class="hint">Only works when this page is served by Loreweaver (same origin). Keep the bridge
      off for standalone use (python <code>http.server</code>).</p>
@@ -114,11 +123,60 @@
     var c = B.read();
     $("enabled").checked = c.enabled === true;
     $("usePreset").checked = c.usePreset !== false;
+    fillRoles(c);
     refreshState();
   }
 
+  // ---- per-job profile rows ----
+  function fillRoles(cfg) {
+    var box = $("roles");
+    box.innerHTML = "";
+    var roles = cfg.roles || {};
+    var profs = [];
+    try {
+      B.getSettings().then(function (lw) {
+        profs = lw.profiles;
+        build();
+      }).catch(function () { build(); });
+    } catch (e) { build(); }
+    function build() {
+      B.ROLE_IDS.forEach(function (id) {
+        var wrap = document.createElement("div");
+        wrap.style.marginTop = "10px";
+        var lab = document.createElement("label");
+        lab.setAttribute("for", "role-" + id);
+        lab.style.margin = "0 0 4px";
+        lab.textContent = B.ROLE_LABELS[id] || id;
+        var sel = document.createElement("select");
+        sel.id = "role-" + id;
+        var main = document.createElement("option");
+        main.value = "";
+        main.textContent = "(main profile)";
+        sel.appendChild(main);
+        profs.forEach(function (p) {
+          var o = document.createElement("option");
+          o.value = p.id;
+          o.textContent = (p.name || p.id) + (p.model ? " — " + p.model : "");
+          sel.appendChild(o);
+        });
+        sel.value = roles[id] || "";
+        if (sel.value && !profs.some(function (p) { return p.id === sel.value; })) {
+          sel.value = ""; // saved profile was deleted — fall back to main
+        }
+        wrap.appendChild(lab);
+        wrap.appendChild(sel);
+        box.appendChild(wrap);
+      });
+    }
+  }
+
   $("save").onclick = function () {
-    B.write({ enabled: $("enabled").checked, profileId: $("profile").value || null, usePreset: $("usePreset").checked });
+    var roles = {};
+    B.ROLE_IDS.forEach(function (id) {
+      var sel = document.getElementById("role-" + id);
+      if (sel && sel.value) roles[id] = sel.value;
+    });
+    B.write({ enabled: $("enabled").checked, profileId: $("profile").value || null, usePreset: $("usePreset").checked, roles: roles });
     fill(); say($("enabled").checked ? "Bridge is ON — calls now go through Loreweaver." : "Bridge is OFF.", "ok");
   };
   $("off").onclick = function () { var c = B.read(); c.enabled = false; B.write(c); fill(); say("Bridge turned off.", "info"); };
@@ -129,7 +187,7 @@
     say("Calling through Loreweaver…", "info");
     B.bridgeFetch("http://placeholder.invalid/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer placeholder" },
+      headers: { "Content-Type": "application/json", Authorization: "Bearer placeholder", "X-RPGE-Route": "main" },
       body: JSON.stringify({ model: "placeholder", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 16, stream: false })
     }).then(function (r) {
       return r.json().then(function (j) { return { r: r, j: j }; });

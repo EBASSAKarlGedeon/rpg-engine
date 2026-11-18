@@ -351,7 +351,7 @@ function maxTokensFor(norm) {
   return Math.min(128000, Math.max(1, n));
 }
 
-function openaiGenText(norm) {
+function openaiGenText(norm, route) {
   const cfg = getAiConfig();
   const preset = getProvider(cfg.provider);
   const key = getAiKey();
@@ -359,6 +359,9 @@ function openaiGenText(norm) {
   const headers = { "Content-Type": "application/json" };
   if (key) headers.Authorization = "Bearer " + key;
   else if (preset.noKey) headers.Authorization = "Bearer ollama";
+  // [rpge-patch 001] carry the call's job id on the request so the Loreweaver bridge
+  // shim can route per job (see PATCHES.md). Ignored by every real provider.
+  headers["X-RPGE-Route"] = AI_ROUTE_IDS.includes(route) ? route : "other";
   if (cfg.provider === "openrouter") {
     headers["HTTP-Referer"] = location.origin;
     headers["X-Title"] = "MNO RPG ENGINE";
@@ -531,7 +534,8 @@ export function routedGenText(inputData, extraOpts) {
   if (plainObj && ("route" in inputData)) { cleanInput = Object.assign({}, inputData); delete cleanInput.route; }
   if (extraOpts && typeof extraOpts === "object" && ("route" in extraOpts)) { cleanExtra = Object.assign({}, extraOpts); delete cleanExtra.route; }
   if (!routeUsesExternal(route)) return perchanceGenText(cleanInput, cleanExtra);
-  return openaiGenText(normalizeInput(cleanInput, cleanExtra));
+  // [rpge-patch 001] pass the job id through so openaiGenText can tag the request.
+  return openaiGenText(normalizeInput(cleanInput, cleanExtra), route);
 }
 
 export async function testAiConnection(baseUrl, model, key, provider, sampling) {

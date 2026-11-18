@@ -20,7 +20,17 @@ const PROFILE = {
   "secret-id": "sec-uuid-1", preset: "Test Preset", proxy: "None",
   "prompt-post-processing": "none",
 };
-const PRESETS = { "Test Preset": { temperature: 0.42, top_p: 0.9, frequency_penalty: 0.5 } };
+const PROFILE2 = {
+  id: "prof-2", mode: "cc", api: "custom", name: "Cheap Profile",
+  "api-url": "http://cheap.example/v1", model: "cheap-model",
+  "secret-id": "sec-uuid-2", preset: "Cheap Preset", proxy: "None",
+  "prompt-post-processing": "none",
+};
+const PROFILES = [PROFILE, PROFILE2];
+const PRESETS = {
+  "Test Preset": { temperature: 0.42, top_p: 0.9, frequency_penalty: 0.5 },
+  "Cheap Preset": { temperature: 0.7, top_p: 0.95, frequency_penalty: 0.1 },
+};
 
 // ---- static server for app/ + mock Loreweaver backend on the SAME origin (as in production:
 //      the app is served by the Loreweaver server itself) ----
@@ -54,7 +64,7 @@ const staticSrv = http.createServer((req, res) => {
         }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
-          settings: { extension_settings: { connectionManager: { selectedProfile: PROFILE.id, profiles: [PROFILE] } } },
+          settings: { extension_settings: { connectionManager: { selectedProfile: PROFILE.id, profiles: PROFILES } } },
           openai_setting_names: Object.keys(PRESETS),
           openai_settings: Object.values(PRESETS).map((p) => JSON.stringify(p)),
         }));
@@ -74,6 +84,7 @@ const staticSrv = http.createServer((req, res) => {
         return res.end(JSON.stringify({ error: { message: "Invalid CSRF token" } }));
       }
       CALL_LOG.push({
+        route: req.headers["x-rpge-route"] || "",
         source: j.chat_completion_source,
         custom_url: j.custom_url,
         model: j.model,
@@ -156,16 +167,41 @@ const staticSrv = http.createServer((req, res) => {
   });
   if (direct.status !== 200 || !direct.streamOk) problems.push("raw bridged stream failed: " + JSON.stringify(direct));
 
-  // assertions on what the mock Loreweaver server saw
-  if (CALL_LOG.length < 2) problems.push("expected 2 bridged calls, saw " + CALL_LOG.length);
+  // ---- role matrix: map the "tracker" job to the cheap profile, then call again ----
+  await page.evaluate(() => {
+    const c = window.LoreweaverBridge.read();
+    c.roles = { tracker: "prof-2" };
+    window.LoreweaverBridge.write(c);
+  });
+  const routed = await page.evaluate(async () => {
+    const call = (route) => fetch("http://placeholder.invalid/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer placeholder", "X-RPGE-Route": route },
+      body: JSON.stringify({ model: "engine-model", stream: false, messages: [{ role: "user", content: "hi" }], max_tokens: 16 }),
+    }).then((r) => r.status);
+    return { tracker: await call("tracker"), gm: await call("gm") };
+  });
+  if (routed.tracker !== 200 || routed.gm !== 200) problems.push("role-routed calls failed: " + JSON.stringify(routed));
+
+  // assertions on what the mock Loreweaver server saw: each call must have been
+  // parameterised by the profile its JOB maps to (unrouted/test -> main profile).
+  const EXPECT = { "": PROFILE, main: PROFILE, gm: PROFILE, tracker: PROFILE2 };
+  if (CALL_LOG.length < 4) problems.push("expected 4 bridged calls, saw " + CALL_LOG.length);
   for (const c of CALL_LOG) {
-    if (c.source !== "custom") problems.push("chat_completion_source wrong: " + c.source);
-    if (c.custom_url !== PROFILE["api-url"]) problems.push("custom_url not from profile: " + c.custom_url);
-    if (c.model !== "profile-model") problems.push("model not from profile: " + c.model);
-    if (c.secret_id !== "sec-uuid-1") problems.push("secret_id not from profile: " + c.secret_id);
+    const p = EXPECT[c.route] || PROFILE;
+    if (c.source !== p.api) problems.push("chat_completion_source wrong for route '" + c.route + "': " + c.source);
+    if (c.custom_url !== p["api-url"]) problems.push("custom_url not from profile for route '" + c.route + "': " + c.custom_url);
+    if (c.model !== p.model) problems.push("model not from profile for route '" + c.route + "': " + c.model);
+    if (c.secret_id !== p["secret-id"]) problems.push("secret_id not from profile for route '" + c.route + "': " + c.secret_id);
     if (c.pageAuth) problems.push("placeholder Authorization reached the server (bridge did not strip it)");
+    // preset sampling must be applied for fields the engine did not set, from the
+    // ROLE's OWN profile preset (cheap profile's Cheap Preset for tracker calls).
+    if (c.route === "tracker") {
+      if (c.temperature !== 0.7) problems.push("cheap preset temperature not applied: " + c.temperature);
+      if (c.top_p !== 0.95) problems.push("cheap preset top_p not applied: " + c.top_p);
+    }
   }
-  const nonStream = CALL_LOG.find((c) => !c.stream);
+  const nonStream = CALL_LOG.find((c) => !c.stream && (c.route === "" || c.route === "main"));
   if (nonStream) {
     // preset sampling must be applied for fields the engine did not set
     if (nonStream.temperature !== 0.42) problems.push("preset temperature not applied: " + nonStream.temperature);

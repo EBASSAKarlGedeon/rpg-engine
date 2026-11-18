@@ -20,12 +20,19 @@
 //   contributes its sampling params (temperature, top_p, top_k, frequency_penalty,
 //   presence_penalty, …) for fields the engine did not set itself.
 //
+//   ROLE MATRIX (bridge v3): the engine tags every call with its job id (X-RPGE-Route
+//   header, see PATCHES.md — gm/check/staging/tracker/npc/scene/memory/npclife/other).
+//   cfg.roles maps a job id to a DIFFERENT profile id (e.g. trackers on a cheap model);
+//   anything unmapped (or "main") uses the main profile. The cheap-model.html page's
+//   whole job is the cheap secondary slot, so it is auto-tagged "cheap".
+//
 //   It must load BEFORE perchance-shim.js and src/scripts/main.js so the wrapper is
 //   in place before any call site captures fetch.
 //
 // CONFIG
-//   localStorage["rpge.loreweaverBridge"] = { enabled, profileId, usePreset }
-//   Configure it on loreweaver-bridge.html (same folder as index.html).
+//   localStorage["rpge.loreweaverBridge"] = { enabled, profileId, usePreset, roles }
+//   roles: { [jobId]: profileId } — jobs not listed use profileId. Configure it on
+//   loreweaver-bridge.html (same folder as index.html).
 //
 // NOTES
 //   - Only works when the app is served by the Loreweaver backend (same origin);
@@ -43,6 +50,36 @@
   const BRIDGE_PATH = "/api/backends/chat-completions/generate";
   const CHAT_RE = /\/chat\/completions\/?$/;
   const SETTINGS_TTL = 5 * 60 * 1000;
+
+  // Engine job ids (AI_ROUTE_IDS in src/scripts/ai-provider.js) + the cheap secondary
+  // model page. Labels are for the bridge config page only.
+  const ROLE_IDS = ["gm", "check", "staging", "tracker", "npc", "scene", "memory", "npclife", "other", "cheap"];
+  const ROLE_LABELS = {
+    gm: "GM narration",
+    check: "Skill checks",
+    staging: "Scene manager",
+    tracker: "Tracker updates",
+    npc: "NPC generation",
+    scene: "Scene image prompt",
+    memory: "Memories",
+    npclife: "NPC life sim",
+    other: "Other engine calls",
+    cheap: "Cheap secondary model",
+  };
+
+  // Which job does this fetch belong to? The engine tags its calls (patch 001);
+  // the cheap-model page is wholesale the cheap slot; anything else is unrouted
+  // (bridge page's own test, engine's connection test) and uses the main profile.
+  function routeFromInit(input, init) {
+    let v = "";
+    try { if (init && init.headers) v = new Headers(init.headers).get("X-RPGE-Route") || ""; } catch (e) {}
+    if (!v) { try { if (input && input.headers && input.headers.get) v = input.headers.get("X-RPGE-Route") || ""; } catch (e) {} }
+    v = String(v).trim().toLowerCase();
+    if (ROLE_IDS.includes(v)) return v;
+    if (v === "main") return "main";
+    if (/\/cheap-model\.html$/.test(location.pathname)) return "cheap";
+    return "main";
+  }
 
   function readCfg() {
     try {
@@ -102,14 +139,20 @@
   const SAMPLER_KEYS = ["temperature", "top_p", "top_k", "top_a", "min_p",
     "frequency_penalty", "presence_penalty", "repetition_penalty"];
 
-  // Map the engine's plain <baseUrl>/chat/completions call onto the chosen profile.
-  async function buildBridgedPayload(url, payload) {
+  // Map the engine's plain <baseUrl>/chat/completions call onto the chosen profile:
+  // the call's job id picks cfg.roles[roleId] when set, else the main profile.
+  async function buildBridgedPayload(url, payload, roleId) {
     const cfg = readCfg();
     const lw = await getLoreweaverSettings();
     if (!lw.profiles.length) throw new Error("No connection profiles in Loreweaver (Connection Manager is empty).");
-    const profile = lw.profiles.find((p) => p && p.id === cfg.profileId)
-      || lw.profiles.find((p) => p && p.id === lw.selectedProfile)
-      || lw.profiles[0];
+    const roles = cfg.roles && typeof cfg.roles === "object" ? cfg.roles : {};
+    const rolePid = roleId && roleId !== "main" ? String(roles[roleId] || "") : "";
+    let profile = rolePid ? (lw.profiles.find((p) => p && p.id === rolePid) || null) : null;
+    if (!profile) {
+      profile = lw.profiles.find((p) => p && p.id === cfg.profileId)
+        || lw.profiles.find((p) => p && p.id === lw.selectedProfile)
+        || lw.profiles[0];
+    }
     if (!profile) throw new Error("Selected connection profile not found in Loreweaver.");
     if (profile.mode && profile.mode !== "cc") {
       throw new Error('Profile "' + profile.name + '" is a text-completion profile — the bridge only supports chat-completion profiles.');
@@ -132,12 +175,13 @@
   }
 
   // fetch-compatible call: (urlEndingInChatCompletions, init) -> Response
-  async function bridgeFetch(url, init) {
+  async function bridgeFetch(url, init, input) {
+    const roleId = routeFromInit(input, init);
     let payload = {};
     if (init && typeof init.body === "string") {
       try { payload = JSON.parse(init.body) || {}; } catch (e) { payload = {}; }
     }
-    payload = await buildBridgedPayload(url, payload);
+    payload = await buildBridgedPayload(url, payload, roleId);
     const bodyJson = JSON.stringify(payload);
 
     const headers = new Headers((init && init.headers) || null);
@@ -166,7 +210,7 @@
       else if (input && input.url) url = input.url;
       const method = String((init && init.method) || (input && input.method) || "GET").toUpperCase();
       if (isEnabled() && method === "POST" && CHAT_RE.test(url)) {
-        return bridgeFetch(url, init);
+        return bridgeFetch(url, init, input);
       }
     } catch (e) {
       console.error("Loreweaver bridge:", e);
@@ -183,5 +227,6 @@
   window.LoreweaverBridge = {
     read: readCfg, write: writeCfg, isEnabled, bridgeFetch, BRIDGE_PATH,
     getSettings: getLoreweaverSettings,
+    ROLE_IDS, ROLE_LABELS,
   };
 })();
