@@ -1,0 +1,269 @@
+{
+  "format": "mno-world",
+  "version": 1,
+  "meta": {
+    "id": "",
+    "name": "Post-Apocalyptic",
+    "description": "",
+    "author": "",
+    "cover": "",
+    "tags": [
+      "post-apocalyptic",
+      "survival",
+      "wasteland"
+    ],
+    "createdAt": "",
+    "updatedAt": ""
+  },
+  "narrativeVibe": "Dust, rust and static — scarce water, loud engines, and kindness as the rarest currency.",
+  "lorebook": [],
+  "scenario": "The grid died a decade ago. Settlements trade water for bullets behind scrap walls, and the wastes between them belong to raiders, dust storms and old machines that never stopped. You run courier jobs across the Salt Flats — and your latest package has everyone shooting at you.",
+  "start": "Dawn burns orange through the dust over Rustmarket's scrap wall. Your bike is packed, your canteen is half full, and the sealed courier case hums faintly — which it should not do. The gate guard waves you through with a look that says don't come back. {{user}}, what do you do?",
+  "imageStyleTags": "(masterpiece:1.2), cinematic, post-apocalyptic concept art, dust storm, rusted vehicles, ((wasteland)), gritty, high detail",
+  "imageNegativeTags": "low quality, fused digits, bad anatomy, watermark, text",
+  "stats": {
+    "pointsPerLevel": 2,
+    "ccBudget": 10,
+    "ccFloor": 1,
+    "averageThreshold": 10,
+    "exceptionalThreshold": 15,
+    "modStep": 1,
+    "dieSides": 20,
+    "useStatModFormula": false,
+    "statModFormula": "",
+    "defs": [
+      {
+        "key": "str",
+        "label": "Strength",
+        "hint": "Raw muscle — lifting, hauling, melee",
+        "start": 10,
+        "max": 50,
+        "rules": "Physical power. Used for melee combat, hauling salvage, breaking into wrecks and carrying heavy loads."
+      },
+      {
+        "key": "agi",
+        "label": "Agility",
+        "hint": "Speed and reflexes — dodging, climbing, quick draws",
+        "start": 10,
+        "max": 50,
+        "rules": "Speed and coordination. Used for dodging, climbing wrecks, quick draws and running dusty ground."
+      },
+      {
+        "key": "end",
+        "label": "Endurance",
+        "hint": "Toughness — heat, hunger, bad water, long marches",
+        "start": 10,
+        "max": 50,
+        "rules": "Toughness. Used to endure heat, hunger, thirst, bad water and long marches across the flats."
+      },
+      {
+        "key": "per",
+        "label": "Perception",
+        "hint": "Spotting — ambushes, salvage, storm signs",
+        "start": 10,
+        "max": 50,
+        "rules": "Awareness. Used to spot ambushes, find salvage, read tracks and see dust storms coming."
+      },
+      {
+        "key": "med",
+        "label": "Medicine",
+        "hint": "Patching people up with little",
+        "start": 10,
+        "max": 50,
+        "rules": "Makeshift medicine. Used to stop bleeding, treat infection and keep people alive with dirty tools."
+      },
+      {
+        "key": "mec",
+        "label": "Mechanics",
+        "hint": "Fixing engines, rigs and guns",
+        "start": 10,
+        "max": 50,
+        "rules": "Mechanical skill. Used to repair bikes and rigs, jury-rig generators and keep guns firing."
+      },
+      {
+        "key": "sur",
+        "label": "Survival",
+        "hint": "Living off the wastes",
+        "start": 10,
+        "max": 50,
+        "rules": "Wasteland lore. Used to find water, hunt, navigate by sun and stars, and read the weather."
+      },
+      {
+        "key": "sho",
+        "label": "Shooting",
+        "hint": "Guns — aim, maintenance, nerve",
+        "start": 10,
+        "max": 50,
+        "rules": "Marksmanship. Used to hit targets with scavenged firearms and keep them clean and fed."
+      },
+      {
+        "key": "dri",
+        "label": "Driving",
+        "hint": "Bikes, buggies and rigs",
+        "start": 10,
+        "max": 50,
+        "rules": "Vehicle handling. Used to drive and maintain bikes, buggies and war-rigs, and to outrun raiders."
+      },
+      {
+        "key": "bar",
+        "label": "Barter",
+        "hint": "Trade talk — haggling, reading markets",
+        "start": 10,
+        "max": 50,
+        "rules": "Trading savvy. Used to haggle in markets, value salvage and talk your way to a better price."
+      }
+    ]
+  },
+  "trackers": [
+    {
+      "key": "location",
+      "hint": "Current Location",
+      "icon": "📍",
+      "type": "text",
+      "show": "header",
+      "effects": "Where the hero currently is — settlement, wreck or open flats.",
+      "rules": "Keep it short and specific, e.g. \"Rustmarket — scrap gate\", \"Salt Flats, mile 40\". Update whenever the scene moves.",
+      "start": "Rustmarket"
+    },
+    {
+      "key": "quest",
+      "label": "Job",
+      "hint": "Current Job",
+      "icon": "📦",
+      "type": "text",
+      "show": "header",
+      "effects": "The hero's single current job. Empty = no active job.",
+      "rules": "One short phrase, e.g. \"Deliver the humming case to Dusthaven\". Only ONE job at a time: when done or abandoned, replace it, or leave empty."
+    },
+    {
+      "key": "level",
+      "label": "Lvl",
+      "hint": "Current Level",
+      "icon": "🏅",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's level. A higher level means a more seasoned waste-runner.",
+      "rules": "Rises when the hero earns enough exp.",
+      "start": 1
+    },
+    {
+      "key": "exp",
+      "label": "Exp",
+      "hint": "Experience points",
+      "icon": "✨",
+      "type": "number",
+      "show": "hero",
+      "effects": "Experience points toward the next level.",
+      "rules": "Award for deliveries, salvage and victories. When exp reaches 100, the hero levels up and exp resets to 0.",
+      "max": 100,
+      "start": 0
+    },
+    {
+      "key": "hp",
+      "label": "HP",
+      "hint": "Hit Points",
+      "icon": "❤️",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's hit points. 0 means downed or left for the dust.",
+      "rules": "Decrease on damage — combat, traps, hazards. Increase on healing, rest or recovery.",
+      "max": "= end*2 + 20",
+      "start": "= end*2 + 20"
+    },
+    {
+      "key": "scrap",
+      "label": "Scrap",
+      "hint": "Salvage currency",
+      "icon": "⚙️",
+      "type": "number",
+      "show": "header",
+      "effects": "Scrap — the wasteland's currency and repair stock.",
+      "rules": "Gained from salvage, jobs and trade; spent on fuel, repairs, ammo and entry fees.",
+      "start": 30
+    },
+    {
+      "key": "ammo",
+      "label": "Ammo",
+      "hint": "Bullets",
+      "icon": "🔫",
+      "type": "number",
+      "show": "hero",
+      "effects": "Ammunition for firearms. At 0 guns are dead weight.",
+      "rules": "Spent firing guns; found while scavenging and looting.",
+      "start": 24
+    },
+    {
+      "key": "water",
+      "label": "Water",
+      "hint": "Drinking water",
+      "icon": "💧",
+      "type": "number",
+      "show": "header",
+      "effects": "Drinking water. At 0 the hero is drying out.",
+      "rules": "Drunk daily and spent on hard travel; refilled at wells, traders and condensers.",
+      "max": 100,
+      "start": 80
+    },
+    {
+      "key": "rads",
+      "label": "Rads",
+      "hint": "Radiation",
+      "icon": "☢️",
+      "type": "number",
+      "show": "hero",
+      "effects": "Radiation sickness. High rads means vomiting, burns and dying slow.",
+      "rules": "Gained in hot zones and dust storms; reduced with meds, scrubbing and clean water.",
+      "max": 100,
+      "start": 0
+    },
+    {
+      "key": "fuel",
+      "label": "Fuel",
+      "hint": "Vehicle fuel",
+      "icon": "⛽",
+      "type": "number",
+      "show": "header",
+      "effects": "Vehicle fuel. At 0 the bike is a sculpture.",
+      "rules": "Burned by driving; refilled at settlements and siphoned from wrecks.",
+      "max": 100,
+      "start": 60
+    }
+  ],
+  "npcTrackers": [
+    {
+      "key": "trust",
+      "label": "Trust",
+      "hint": "Faith in the hero",
+      "icon": "🤝",
+      "type": "number",
+      "show": "profile",
+      "effects": "How much this character trusts the hero; high trust unlocks secrets and aid, low trust risks betrayal.",
+      "rules": "Moves when the hero keeps or breaks promises.",
+      "max": 100,
+      "start": 50
+    },
+    {
+      "key": "condition",
+      "label": "Condition",
+      "hint": "Physical state",
+      "icon": "🩹",
+      "type": "text",
+      "show": "profile",
+      "effects": "Physical state; while wounded the character fights poorly and needs protection.",
+      "rules": "Worsens on injury, improves with rest and healing.",
+      "start": "Healthy"
+    },
+    {
+      "key": "loyalty",
+      "label": "Loyalty",
+      "hint": "Devotion to the cause",
+      "icon": "🛡️",
+      "type": "number",
+      "show": "profile",
+      "effects": "Devotion to the hero's cause rather than the person; high loyalty holds the line in defeat, low loyalty defects for better offers.",
+      "rules": "Moves with victories, ideals, and pay.",
+      "max": 100,
+      "start": 50
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "rpg-engine-port",
+  "private": true,
+  "description": "Test tooling for the RPG Engine port. SillyTavern ignores this file; the extension itself has no dependencies.",
+  "scripts": {
+    "serve": "python3 -m http.server 8765 --bind 127.0.0.1 --directory app",
+    "mock": "node tools/mock-llm.js /tmp/rpge-mock.log",
+    "test:boot": "node tools/boot-test.js http://127.0.0.1:8765/index.html",
+    "test:tweaks": "node tools/check-tweaks.js http://127.0.0.1:8765/index.html",
+    "test:e2e": "node tools/e2e.js http://127.0.0.1:8765/index.html /tmp/rpge-mock.log .",
+    "test:bridge": "node tools/check-bridge.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.1"
+  }
+}

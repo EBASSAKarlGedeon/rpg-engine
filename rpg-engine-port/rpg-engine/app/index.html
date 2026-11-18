@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RPG Engine</title>
+<link rel="icon" href="src/images/favicon.png">
+<link rel="stylesheet" href="src/styles.css">
+</head>
+<body>
+<div id="bootSplash"><div class="bs-title">RPG ENGINE</div></div>
+<!-- 0) Loreweaver bridge: rewrites provider calls through the Loreweaver server when enabled
+        (must come first, before any call site captures fetch) -->
+<script src="shims/loreweaver-bridge.js"></script>
+<!-- 1) stand-ins for the Perchance platform plugins (defines window.root) -->
+<script src="shims/perchance-shim.js"></script>
+<!-- 2) original boot script: copies root.* plugins onto window.* -->
+<script src="src/scripts/boot.js"></script>
+<!-- 3) the app itself (untouched) -->
+<script type="module" src="src/scripts/main.js"></script>
+<!-- 4) cosmetic tweaks that hide platform-only UI (community, tavern); safe to delete -->
+<script src="shims/tweaks.js" defer></script>
+</body>
+</html>

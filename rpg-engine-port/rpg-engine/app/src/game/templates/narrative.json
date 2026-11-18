@@ -1,0 +1,106 @@
+{
+  "format": "mno-world",
+  "version": 1,
+  "meta": {
+    "id": "",
+    "name": "Narrative",
+    "description": "Pure storytelling — no stats, no dice, no skill checks. Characters, prose and consequences, with a world that moves through real days and hours.",
+    "author": "",
+    "cover": "",
+    "tags": [
+      "narrative",
+      "story",
+      "drama"
+    ],
+    "createdAt": "",
+    "updatedAt": ""
+  },
+  "narrativeVibe": "Literary, character-driven storytelling. Vivid sensory prose, natural dialogue, emotional honesty. Outcomes follow from character, choice and consequence — never from dice. Let quiet moments breathe and let time passing matter.",
+  "lorebook": [],
+  "scenario": "A story about people. This world runs on narrative alone: no stats, no skill checks, no combat math. What happens next follows from who the characters are and what they choose. Time is real and keeps moving — hours pass within a scene, days turn over, and the calendar advances as the story unfolds. Treat every event as an opportunity for character and consequence rather than a roll of the dice.",
+  "start": "Open on {{user}} in an ordinary moment that quietly matters — somewhere with texture and a person worth knowing, a small tension in the air. Establish the time of day, the day of the week and the date naturally in the prose. Then hand the scene to {{user}} and follow where they lead.",
+  "imageStyleTags": "(masterpiece:1.2), cinematic, photorealistic, film still, natural light, shallow depth of field, high detail",
+  "imageNegativeTags": "low quality, fused digits, bad anatomy, watermark, text, cartoon",
+  "stats": {
+    "pointsPerLevel": 0,
+    "ccBudget": 0,
+    "ccFloor": 0,
+    "averageThreshold": 10,
+    "exceptionalThreshold": 15,
+    "modStep": 1,
+    "dieSides": 20,
+    "useStatModFormula": false,
+    "statModFormula": "",
+    "defs": []
+  },
+  "trackers": [
+    {
+      "key": "day",
+      "label": "Day",
+      "hint": "In-game day number",
+      "icon": "🗓️",
+      "type": "number",
+      "show": "header",
+      "effects": "The current in-game day number — how much time has passed since the story began.",
+      "rules": "Starts at 1. Increase by 1 each time a full day passes in the story. Never decrease.",
+      "start": 1
+    },
+    {
+      "key": "dayname",
+      "label": "Day Name",
+      "hint": "Day of the week",
+      "icon": "📅",
+      "type": "text",
+      "show": "header",
+      "effects": "The current day of the week.",
+      "rules": "Use exactly one of: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday or Sunday. Advance by one each time the day number increases.",
+      "start": "Monday"
+    },
+    {
+      "key": "time",
+      "label": "Time",
+      "hint": "Time of day",
+      "icon": "🕐",
+      "type": "text",
+      "show": "header",
+      "effects": "The current clock time.",
+      "rules": "Write it in 12-hour format, e.g. \"10:00 AM\", \"1:20 PM\". Advance it as in-story minutes and hours pass — a scene spanning a few hours should move the clock by that much.",
+      "start": "10:00 AM"
+    },
+    {
+      "key": "date",
+      "label": "Date",
+      "hint": "Calendar date",
+      "icon": "📆",
+      "type": "text",
+      "show": "header",
+      "effects": "The current calendar date.",
+      "rules": "Write it as \"D Mon YYYY\", e.g. \"1 Jan 2027\", \"14 Feb 2027\". Advance it in lockstep with the day number.",
+      "start": "1 Jan 2027"
+    }
+  ],
+  "npcTrackers": [
+    {
+      "key": "relationship",
+      "label": "Relationship",
+      "hint": "Bond with the hero",
+      "icon": "👥",
+      "type": "text",
+      "show": "profile",
+      "effects": "How this character is bonded to the hero (stranger, friend, rival, lover...); the bond gates what they will do for each other.",
+      "rules": "Deepens or breaks with shared trials.",
+      "start": ""
+    },
+    {
+      "key": "mood",
+      "label": "Mood",
+      "hint": "Emotional state",
+      "icon": "🎭",
+      "type": "text",
+      "show": "profile",
+      "effects": "Current emotional state; a hostile mood closes dialogue options while a warm one opens them.",
+      "rules": "Shifts with how the hero treats them.",
+      "start": ""
+    }
+  ]
+}

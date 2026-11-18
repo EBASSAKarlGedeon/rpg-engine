@@ -1,0 +1,269 @@
+{
+  "format": "mno-world",
+  "version": 1,
+  "meta": {
+    "id": "",
+    "name": "Drama",
+    "description": "",
+    "author": "",
+    "cover": "",
+    "tags": [
+      "drama",
+      "romance",
+      "relationships"
+    ],
+    "createdAt": "",
+    "updatedAt": ""
+  },
+  "narrativeVibe": "Warm, sharp and human — charged conversations, fragile reputations, and feelings with consequences.",
+  "lorebook": [],
+  "scenario": "In the city of Meridian, everyone is one rumor away from ruin or stardom. You've just landed a job at the Halcyon — the gallery where the whole scene meets — with big dreams, an empty wallet, and a complicated past that's about to walk through the door.",
+  "start": "Opening night at the Halcyon. Champagne, flashbulbs, and your new boss hissing that the headliner hasn't shown. Across the room, someone you swore you'd never speak to again catches your eye and smiles. {{user}}, what do you do?",
+  "imageStyleTags": "(masterpiece:1.2), cinematic, photorealistic, warm interior light, emotional drama film still, stylish crowd, high detail",
+  "imageNegativeTags": "low quality, fused digits, bad anatomy, watermark, text",
+  "stats": {
+    "pointsPerLevel": 2,
+    "ccBudget": 10,
+    "ccFloor": 1,
+    "averageThreshold": 10,
+    "exceptionalThreshold": 15,
+    "modStep": 1,
+    "dieSides": 20,
+    "useStatModFormula": false,
+    "statModFormula": "",
+    "defs": [
+      {
+        "key": "cha",
+        "label": "Charm",
+        "hint": "Presence and persuasion — winning rooms",
+        "start": 10,
+        "max": 50,
+        "rules": "Presence and persuasion. Used to win over rooms, defuse scenes, flirt, haggle and talk your way backstage."
+      },
+      {
+        "key": "wit",
+        "label": "Wits",
+        "hint": "Reading people and thinking fast",
+        "start": 10,
+        "max": 50,
+        "rules": "Perception and quick thinking. Used to read intentions, land the right line and spot lies before they land on you."
+      },
+      {
+        "key": "emp",
+        "label": "Empathy",
+        "hint": "Care that lands — listening, comfort, repair",
+        "start": 10,
+        "max": 50,
+        "rules": "Emotional intelligence. Used to comfort, reconcile, understand what someone needs and repair what's broken."
+      },
+      {
+        "key": "int",
+        "label": "Intellect",
+        "hint": "Smart moves — plans, contracts, figures",
+        "start": 10,
+        "max": 50,
+        "rules": "Cleverness and knowledge. Used for contracts, plans, budgets and seeing three moves ahead."
+      },
+      {
+        "key": "cre",
+        "label": "Creativity",
+        "hint": "Making things people feel",
+        "start": 10,
+        "max": 50,
+        "rules": "Creative expression. Used for performances, writing, design and cooking up the idea that saves the night."
+      },
+      {
+        "key": "sty",
+        "label": "Style",
+        "hint": "Look and image — the right entrance",
+        "start": 10,
+        "max": 50,
+        "rules": "Image and taste. Used to dress the part, stage a scene and make entrances people remember."
+      },
+      {
+        "key": "per",
+        "label": "Perception",
+        "hint": "Noticing the real story",
+        "start": 10,
+        "max": 50,
+        "rules": "Awareness. Used to catch whispered asides, hidden motives and the detail that changes everything."
+      },
+      {
+        "key": "wil",
+        "label": "Willpower",
+        "hint": "Holding together under pressure",
+        "start": 10,
+        "max": 50,
+        "rules": "Self-command. Used to face humiliation, rejection and scandal without breaking character."
+      },
+      {
+        "key": "fit",
+        "label": "Fitness",
+        "hint": "Body and stamina — long nights, dance floors",
+        "start": 10,
+        "max": 50,
+        "rules": "Physical conditioning. Used for dance, long shooting days, late nights and bouncing back."
+      },
+      {
+        "key": "luc",
+        "label": "Luck",
+        "hint": "Being in the right room",
+        "start": 10,
+        "max": 50,
+        "rules": "Fortune. Used to land the chance meeting, the spare ticket and the narrow save."
+      }
+    ]
+  },
+  "trackers": [
+    {
+      "key": "location",
+      "hint": "Current Location",
+      "icon": "📍",
+      "type": "text",
+      "show": "header",
+      "effects": "Where the hero currently is — venue, street or apartment.",
+      "rules": "Keep it short and specific, e.g. \"Meridian — the Halcyon, lobby\", \"Rooftop bar\". Update whenever the scene moves.",
+      "start": "Meridian"
+    },
+    {
+      "key": "quest",
+      "label": "Goal",
+      "hint": "Current Goal",
+      "icon": "🎯",
+      "type": "text",
+      "show": "header",
+      "effects": "The hero's single current goal. Empty = drifting.",
+      "rules": "One short phrase, e.g. \"Sell the collection before Friday\". Only ONE goal at a time: when achieved or dropped, replace it, or leave empty."
+    },
+    {
+      "key": "level",
+      "label": "Lvl",
+      "hint": "Current Level",
+      "icon": "🏅",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's standing. A higher level means a bigger name.",
+      "rules": "Rises when the hero earns enough exp.",
+      "start": 1
+    },
+    {
+      "key": "exp",
+      "label": "Exp",
+      "hint": "Experience points",
+      "icon": "✨",
+      "type": "number",
+      "show": "hero",
+      "effects": "Experience points toward the next level.",
+      "rules": "Award for breakthroughs, triumphs and sold-out nights. When exp reaches 100, the hero levels up and exp resets to 0.",
+      "max": 100,
+      "start": 0
+    },
+    {
+      "key": "hp",
+      "label": "HP",
+      "hint": "Hit Points",
+      "icon": "❤️",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's health. 0 means collapse.",
+      "rules": "Decrease on damage — combat, traps, hazards. Increase on healing, rest or recovery.",
+      "max": "= fit*2 + 20",
+      "start": "= fit*2 + 20"
+    },
+    {
+      "key": "cash",
+      "label": "Cash",
+      "hint": "Money",
+      "icon": "💵",
+      "type": "number",
+      "show": "header",
+      "effects": "The hero's money, in cash.",
+      "rules": "Increase from paychecks, gigs and sales; decrease from rent, purchases and favors.",
+      "start": 300
+    },
+    {
+      "key": "rep",
+      "label": "Rep",
+      "hint": "Reputation",
+      "icon": "⭐",
+      "type": "number",
+      "show": "hero",
+      "effects": "How the scene regards the hero; high rep opens doors and forgives mistakes, low rep closes them.",
+      "rules": "Rises with triumphs and generosity; falls with scandals and cruelty.",
+      "max": 100,
+      "start": 10
+    },
+    {
+      "key": "romance",
+      "label": "Romance",
+      "hint": "Love life",
+      "icon": "💘",
+      "type": "number",
+      "show": "hero",
+      "effects": "The state of the hero's love life; high means devotion on the table, low means alone.",
+      "rules": "Grows with dates and gestures kept; fades with neglect, betrayal and missed chances.",
+      "max": 100,
+      "start": 0
+    },
+    {
+      "key": "stress",
+      "label": "Stress",
+      "hint": "Pressure",
+      "icon": "😰",
+      "type": "number",
+      "show": "hero",
+      "effects": "Pressure on the hero; high stress means mistakes, tears and burnout.",
+      "rules": "Rises with scandals, deadlines and fights; eases with rest, friends and quiet nights.",
+      "max": 100,
+      "start": 20
+    },
+    {
+      "key": "day",
+      "label": "Day",
+      "hint": "Day count",
+      "icon": "🗓️",
+      "type": "number",
+      "show": "header",
+      "effects": "The current in-game day number — deadlines are real.",
+      "rules": "Starts at 1. Increase by 1 whenever a full day passes. Never decrease.",
+      "start": 1
+    }
+  ],
+  "npcTrackers": [
+    {
+      "key": "trust",
+      "label": "Trust",
+      "hint": "Faith in the hero",
+      "icon": "🤝",
+      "type": "number",
+      "show": "profile",
+      "effects": "How much this character trusts the hero; high trust unlocks secrets and aid, low trust risks betrayal.",
+      "rules": "Moves when the hero keeps or breaks promises.",
+      "max": 100,
+      "start": 50
+    },
+    {
+      "key": "romance",
+      "label": "Romance",
+      "hint": "Romantic interest",
+      "icon": "💘",
+      "type": "number",
+      "show": "profile",
+      "effects": "Romantic interest in the hero; high romance opens devotion and jealousy arcs, low closes them.",
+      "rules": "Grows with intimacy and gestures, dies with neglect or cruelty.",
+      "max": 100,
+      "start": 0
+    },
+    {
+      "key": "mood",
+      "label": "Mood",
+      "hint": "Emotional state",
+      "icon": "🎭",
+      "type": "text",
+      "show": "profile",
+      "effects": "Current emotional state; a hostile mood closes dialogue options while a warm one opens them.",
+      "rules": "Shifts with how the hero treats them.",
+      "start": ""
+    }
+  ]
+}

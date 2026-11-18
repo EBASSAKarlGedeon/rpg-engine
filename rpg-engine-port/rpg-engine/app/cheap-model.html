@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RPG Engine - cheap model</title>
+<!-- Loreweaver bridge first, so the Test call also goes through it when enabled -->
+<script src="shims/loreweaver-bridge.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #11100e; color: #e0d6b8; font: 16px/1.5 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 18px; letter-spacing: .12em; text-transform: uppercase; color: #8b9a6e; font-weight: 600; }
+  p { color: #a89c82; }
+  label { display: block; margin: 16px 0 6px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: #8a8070; }
+  input { width: 100%; box-sizing: border-box; padding: 10px 12px; background: #1a1a18; border: 1px solid #2a2520; color: #e0d6b8; font: inherit; border-radius: 2px; }
+  input:focus-visible, button:focus-visible { outline: 2px solid #8b9a6e; outline-offset: 2px; }
+  .row { display: flex; gap: 10px; margin-top: 22px; flex-wrap: wrap; }
+  button { padding: 10px 16px; background: #1a1a18; border: 1px solid #8b9a6e; color: #8b9a6e; font: inherit; cursor: pointer; border-radius: 2px; }
+  button.secondary { border-color: #3a3528; color: #e0d6b8; }
+  #msg { margin-top: 18px; min-height: 1.5em; }
+  .ok { color: #7bd07b; } .bad { color: #e06666; }
+  code { color: #e0d6b8; background: #1a1a18; padding: 1px 5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Cheap secondary model</h1>
+  <p>Optional. In the game, open <code>Settings &gt; AI Model</code> and switch OFF the routes you want to run cheaply
+     (for example Trackers, Scene manager, Skill checks, Memories). Those calls then use the model below instead of your main one.
+     Settings are stored only in this browser.</p>
+  <label for="baseUrl">Base URL (OpenAI-compatible)</label>
+  <input id="baseUrl" placeholder="https://.../v1" autocomplete="off">
+  <label for="apiKey">API key</label>
+  <input id="apiKey" type="password" autocomplete="off">
+  <label for="model">Model name</label>
+  <input id="model" placeholder="model id" autocomplete="off">
+  <label for="temperature">Temperature (optional)</label>
+  <input id="temperature" placeholder="e.g. 0.7" inputmode="decimal" autocomplete="off">
+  <div class="row">
+    <button id="save">Save</button>
+    <button id="test" class="secondary">Test connection</button>
+    <button id="clear" class="secondary">Clear</button>
+  </div>
+  <div id="msg" role="status"></div>
+</main>
+<script>
+(function () {
+  var KEY = "rpge.cheapModel";
+  var $ = function (id) { return document.getElementById(id); };
+  var say = function (t, ok) { var m = $("msg"); m.textContent = t; m.className = ok ? "ok" : "bad"; };
+  function read() { try { return JSON.parse(localStorage.getItem(KEY) || "null") || {}; } catch (e) { return {}; } }
+  function fill() { var c = read(); $("baseUrl").value = c.baseUrl || ""; $("apiKey").value = c.apiKey || ""; $("model").value = c.model || ""; $("temperature").value = c.temperature == null ? "" : c.temperature; }
+  function collect() {
+    var t = parseFloat($("temperature").value);
+    var c = { baseUrl: $("baseUrl").value.trim().replace(/\/+$/, ""), apiKey: $("apiKey").value.trim(), model: $("model").value.trim() };
+    if (isFinite(t)) c.temperature = t;
+    return c;
+  }
+  $("save").onclick = function () {
+    var c = collect();
+    if (!c.baseUrl || !c.model) return say("Base URL and model name are required.", false);
+    try { localStorage.setItem(KEY, JSON.stringify(c)); say("Saved.", true); } catch (e) { say("Could not save: " + e.message, false); }
+  };
+  $("clear").onclick = function () { try { localStorage.removeItem(KEY); } catch (e) {} fill(); say("Cleared.", true); };
+  $("test").onclick = function () {
+    var c = collect();
+    if (!c.baseUrl || !c.model) return say("Fill in Base URL and model name first.", false);
+    say("Testing...", true);
+    var h = { "Content-Type": "application/json" };
+    if (c.apiKey) h.Authorization = "Bearer " + c.apiKey;
+    fetch(c.baseUrl + "/chat/completions", { method: "POST", headers: h, body: JSON.stringify({ model: c.model, max_tokens: 8, messages: [{ role: "user", content: "Reply with OK" }] }) })
+      .then(function (r) { return r.json().then(function (j) { return { r: r, j: j }; }); })
+      .then(function (x) {
+        if (!x.r.ok) return say("Error " + x.r.status + ": " + ((x.j && x.j.error && x.j.error.message) || "request failed"), false);
+        var txt = x.j && x.j.choices && x.j.choices[0] && x.j.choices[0].message ? x.j.choices[0].message.content : "";
+        say("Connected. Reply: " + String(txt).slice(0, 60), true);
+      })
+      .catch(function (e) { say("Could not reach the endpoint (" + e.message + "). If it blocks browser requests (CORS), this provider needs a proxy.", false); });
+  };
+  fill();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+[
+  {
+    "file": "blank.json",
+    "name": "Blank",
+    "desc": "Start completely from scratch — no stats, no trackers, nothing predefined.",
+    "icon": "📄",
+    "tag": "empty"
+  },
+  {
+    "file": "narrative.json",
+    "name": "Narrative",
+    "desc": "Storytelling without rules — no stats, no skill checks. Just characters, prose, and a world that moves through days, dates and clock time.",
+    "icon": "📖",
+    "tag": "story"
+  },
+  {
+    "file": "fantasy.json",
+    "name": "Fantasy",
+    "desc": "Swords, sorcery and adventure — a classic medieval fantasy world of kingdoms, dungeons and magic.",
+    "icon": "⚔️",
+    "tag": "fantasy"
+  },
+  {
+    "file": "space.json",
+    "name": "Space Sci-fi",
+    "desc": "Starbases, alien worlds and deep-space voyages — a galaxy of exploration and danger.",
+    "icon": "🚀",
+    "tag": "sci-fi"
+  },
+  {
+    "file": "cyberpunk.json",
+    "name": "Cyberpunk",
+    "desc": "High tech, low life — neon megacities, street chrome and corporate shadow-wars.",
+    "icon": "🌆",
+    "tag": "cyberpunk"
+  },
+  {
+    "file": "modern.json",
+    "name": "Modern",
+    "desc": "Everyday life in the modern city — work, friends, rent and ambitions.",
+    "icon": "🏙️",
+    "tag": "modern"
+  },
+  {
+    "file": "horror.json",
+    "name": "Horror",
+    "desc": "Survive the dark — haunted towns, fragile minds, and things that hunt by sound.",
+    "icon": "🕯️",
+    "tag": "horror"
+  },
+  {
+    "file": "postapoc.json",
+    "name": "Post-Apocalyptic",
+    "desc": "Dust, rust and static — water, bullets and engines across the wastes.",
+    "icon": "☢️",
+    "tag": "wasteland"
+  },
+  {
+    "file": "drama.json",
+    "name": "Drama",
+    "desc": "Feelings with consequences — reputation, romance and high-stakes city life.",
+    "icon": "🎭",
+    "tag": "drama"
+  }
+]

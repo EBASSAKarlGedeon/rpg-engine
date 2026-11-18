@@ -1,0 +1,269 @@
+{
+  "format": "mno-world",
+  "version": 1,
+  "meta": {
+    "id": "",
+    "name": "Cyberpunk",
+    "description": "",
+    "author": "",
+    "cover": "",
+    "tags": [
+      "cyberpunk",
+      "neon",
+      "street"
+    ],
+    "createdAt": "",
+    "updatedAt": ""
+  },
+  "narrativeVibe": "Dark, neon-drenched cyberpunk — gritty, stylish and dangerous.",
+  "lorebook": [],
+  "scenario": "Night City eats the weak. You're a street runner scraping by on gigs, chrome and nerve, caught between ruthless corporations, gangs and your own fading humanity.",
+  "start": "Rain hisses on the fire escapes above. Your fixer just pinged you a job: a datashard that someone rich is willing to kill for. {{user}}, what do you do?",
+  "imageStyleTags": "(masterpiece:1.2), cinematic, cyberpunk concept art, ((Cyberpunk)), high detail, moody",
+  "imageNegativeTags": "low quality, fused digits, bad anatomy, watermark, text",
+  "stats": {
+    "pointsPerLevel": 2,
+    "ccBudget": 12,
+    "ccFloor": 1,
+    "averageThreshold": 10,
+    "exceptionalThreshold": 15,
+    "modStep": 1,
+    "dieSides": 20,
+    "useStatModFormula": false,
+    "statModFormula": "",
+    "defs": [
+      {
+        "key": "bod",
+        "label": "Body",
+        "hint": "Physical might and toughness — brawling, lifting, absorbing hits",
+        "start": 10,
+        "max": 50,
+        "rules": "Physical might and toughness. Used for brawling, lifting, grappling and absorbing damage that would floor lesser folk."
+      },
+      {
+        "key": "ref",
+        "label": "Reflexes",
+        "hint": "Speed and reaction — gunplay, dodging, cyber-augmented movement",
+        "start": 10,
+        "max": 50,
+        "rules": "Speed, reaction time and hand-eye coordination. Used for gunplay, dodging, quick draws and lightning-fast movement."
+      },
+      {
+        "key": "int",
+        "label": "Intellect",
+        "hint": "Logic and data — hacking, deduction, code",
+        "start": 10,
+        "max": 50,
+        "rules": "Logic, deduction and data-crunching. Used for hacking, coding, research and unraveling conspiracies."
+      },
+      {
+        "key": "tec",
+        "label": "Technical",
+        "hint": "Engineering and craft — building gear, modding chrome, fixing tech",
+        "start": 10,
+        "max": 50,
+        "rules": "Engineering skill. Used to build and repair gear, install and maintain cyberware, and jury-rig machines."
+      },
+      {
+        "key": "coo",
+        "label": "Cool",
+        "hint": "Nerve under pressure — staying calm, resisting fear and intimidation",
+        "start": 10,
+        "max": 50,
+        "rules": "Nerve and composure. Used to stay calm under fire, resist fear and intimidation, and keep a cool head in negotiations."
+      },
+      {
+        "key": "emp",
+        "label": "Empathy",
+        "hint": "Reading people — insight, connections, resisting dehumanization",
+        "start": 10,
+        "max": 50,
+        "rules": "Emotional intelligence. Used to read people, spot lies, build trust and resist the dehumanizing pull of chrome."
+      },
+      {
+        "key": "per",
+        "label": "Perception",
+        "hint": "Street awareness — spotting danger, surveillance, hidden things",
+        "start": 10,
+        "max": 50,
+        "rules": "Awareness and street instincts. Used to spot tails, hidden threats and surveillance, and to notice small telling details."
+      },
+      {
+        "key": "str",
+        "label": "Streetwise",
+        "hint": "The underground — knowing gangs, contacts, black markets",
+        "start": 10,
+        "max": 50,
+        "rules": "Knowledge of the criminal underground. Used to navigate gangs, find contacts, buy on the black market and know who runs what."
+      },
+      {
+        "key": "chr",
+        "label": "Chrome",
+        "hint": "Cyberware affinity — capacity, control, resistance to chrome psychosis",
+        "start": 10,
+        "max": 50,
+        "rules": "Affinity with cyberware. Determines how much chrome the hero can safely carry and how well they control their implants."
+      },
+      {
+        "key": "luc",
+        "label": "Luck",
+        "hint": "Fortune — wild chances, favorable coincidences and narrow escapes",
+        "start": 10,
+        "max": 50,
+        "rules": "Fortune and fate. Used to nudge uncertain outcomes, find favorable coincidences and slip through narrow escapes."
+      }
+    ]
+  },
+  "trackers": [
+    {
+      "key": "location",
+      "hint": "Current Location",
+      "icon": "📍",
+      "type": "text",
+      "show": "header",
+      "effects": "Where the hero currently is — district, building or street.",
+      "rules": "Keep it short and specific, e.g. \"Watson — Afterlife bar\", \"Kabuki, market alley\". Update whenever the scene moves.",
+      "start": "Night City"
+    },
+    {
+      "key": "quest",
+      "label": "Quest",
+      "hint": "Current Active Quest",
+      "icon": "🎯",
+      "type": "text",
+      "show": "header",
+      "effects": "The hero's single current active job. Empty = no active job.",
+      "rules": "One short phrase, e.g. \"Rip the data from Arasaka tower\". Only ONE job at a time: when done or abandoned, replace it, or leave empty."
+    },
+    {
+      "key": "level",
+      "label": "Lvl",
+      "hint": "Current Level",
+      "icon": "🏅",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's street level. A higher level means a more seasoned and feared runner.",
+      "rules": "Rises when the hero earns enough exp.",
+      "start": 1
+    },
+    {
+      "key": "exp",
+      "label": "Exp",
+      "hint": "Experience points",
+      "icon": "✨",
+      "type": "number",
+      "show": "hero",
+      "effects": "Experience points toward the next level.",
+      "rules": "Award for completing jobs and victories. When exp reaches 100, the hero levels up and exp resets to 0.",
+      "max": 100,
+      "start": 0
+    },
+    {
+      "key": "hp",
+      "label": "HP",
+      "hint": "Hit Points",
+      "icon": "❤️",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's hit points. 0 means downed or in peril.",
+      "rules": "Decrease on damage — combat, traps, hazards. Increase on med-stims, healing, rest or recovery.",
+      "max": "= bod*2 + 20",
+      "start": "= bod*2 + 20"
+    },
+    {
+      "key": "eddies",
+      "label": "Eddies",
+      "hint": "Money",
+      "icon": "💲",
+      "type": "number",
+      "show": "header",
+      "effects": "The hero's money, in eddies.",
+      "rules": "Increase from gig payouts, loot and sales; decrease from purchases, bribes, fees and fines.",
+      "start": 200
+    },
+    {
+      "key": "chrome",
+      "label": "Chrome",
+      "hint": "Cyberware installed",
+      "icon": "🦾",
+      "type": "number",
+      "show": "hero",
+      "effects": "How much cyberware the hero has installed. High chrome strains flesh and humanity.",
+      "rules": "Increase when new cyberware is installed; decrease only when chrome is removed.",
+      "max": "= chr*2",
+      "start": 0
+    },
+    {
+      "key": "heat",
+      "label": "Heat",
+      "hint": "Law enforcement attention",
+      "icon": "🔥",
+      "type": "number",
+      "show": "header",
+      "effects": "How much attention the hero has drawn from cops and corps. High heat means being hunted.",
+      "rules": "Increase on loud crimes and stunts; decrease by laying low.",
+      "max": 100,
+      "start": 0
+    },
+    {
+      "key": "humanity",
+      "label": "Humanity",
+      "hint": "Soul remaining",
+      "icon": "🫀",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's remaining humanity. At 0 they lose themselves to the machine.",
+      "rules": "Decrease with brutal acts and heavy chrome; it rarely recovers.",
+      "max": 100,
+      "start": 100
+    },
+    {
+      "key": "streetcred",
+      "label": "Street Cred",
+      "hint": "Reputation on the street",
+      "icon": "🌃",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's reputation in the underworld. High street cred opens doors and better prices.",
+      "rules": "Increase with successful gigs and bold moves; decrease with failure and betrayal.",
+      "max": 100,
+      "start": 0
+    }
+  ],
+  "npcTrackers": [
+    {
+      "key": "trust",
+      "label": "Trust",
+      "hint": "Faith in the hero",
+      "icon": "🤝",
+      "type": "number",
+      "show": "profile",
+      "effects": "How much this character trusts the hero; high trust unlocks secrets and aid, low trust risks betrayal.",
+      "rules": "Moves when the hero keeps or breaks promises.",
+      "max": 100,
+      "start": 50
+    },
+    {
+      "key": "mood",
+      "label": "Mood",
+      "hint": "Emotional state",
+      "icon": "🎭",
+      "type": "text",
+      "show": "profile",
+      "effects": "Current emotional state; a hostile mood closes dialogue options while a warm one opens them.",
+      "rules": "Shifts with how the hero treats them.",
+      "start": ""
+    },
+    {
+      "key": "favor",
+      "label": "Favor",
+      "hint": "Debts owed",
+      "icon": "🙏",
+      "type": "number",
+      "show": "profile",
+      "effects": "Debts between this character and the hero; positive means they owe the hero.",
+      "rules": "Earn it with aid, spend it to ask hard things.",
+      "start": 0
+    }
+  ]
+}

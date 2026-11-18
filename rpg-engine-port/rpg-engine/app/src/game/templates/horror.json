@@ -1,0 +1,268 @@
+{
+  "format": "mno-world",
+  "version": 1,
+  "meta": {
+    "id": "",
+    "name": "Horror",
+    "description": "",
+    "author": "",
+    "cover": "",
+    "tags": [
+      "horror",
+      "survival",
+      "mystery"
+    ],
+    "createdAt": "",
+    "updatedAt": ""
+  },
+  "narrativeVibe": "Slow-burn dread — quiet streets, wrong sounds, and things that notice when you look at them.",
+  "lorebook": [],
+  "scenario": "The town of Blackwood Falls looks ordinary on a map. People go missing here every winter, and the ones who come back don't talk about it. You've just inherited a house on the edge of the Hollow — and something inside already knows your name.",
+  "start": "Rain drums on the windows of the Greyline bus as it pulls into Blackwood Falls after midnight. The driver won't meet your eyes. Your late uncle's house keys are cold in your pocket, and every streetlamp on Hollow Road is out. {{user}}, what do you do?",
+  "imageStyleTags": "(masterpiece:1.2), cinematic, dark horror concept art, fog, flashlight beam in darkness, ((horror)), eerie, high detail",
+  "imageNegativeTags": "low quality, fused digits, bad anatomy, watermark, text",
+  "stats": {
+    "pointsPerLevel": 2,
+    "ccBudget": 10,
+    "ccFloor": 1,
+    "averageThreshold": 10,
+    "exceptionalThreshold": 15,
+    "modStep": 1,
+    "dieSides": 20,
+    "useStatModFormula": false,
+    "statModFormula": "",
+    "defs": [
+      {
+        "key": "end",
+        "label": "Endurance",
+        "hint": "Stamina and resilience — running, enduring, holding together",
+        "start": 10,
+        "max": 50,
+        "rules": "Stamina and resilience. Used to keep going through long nights, pain, cold and exhaustion, and to shrug off illness and poison."
+      },
+      {
+        "key": "agi",
+        "label": "Agility",
+        "hint": "Speed and reflexes — running, dodging, hiding fast",
+        "start": 10,
+        "max": 50,
+        "rules": "Speed and coordination. Used for sprinting, dodging grabs, climbing fences and moving quietly under pressure."
+      },
+      {
+        "key": "per",
+        "label": "Perception",
+        "hint": "Noticing what's wrong — sounds, tracks, things out of place",
+        "start": 10,
+        "max": 50,
+        "rules": "Awareness and attention to detail. Used to hear what's moving downstairs, spot disturbed earth and read a room that feels wrong."
+      },
+      {
+        "key": "int",
+        "label": "Intellect",
+        "hint": "Reasoning under pressure — research, puzzles, connecting clues",
+        "start": 10,
+        "max": 50,
+        "rules": "Logic and memory. Used for research, archives, puzzles and piecing together what the town is hiding."
+      },
+      {
+        "key": "occ",
+        "label": "Occult",
+        "hint": "Forbidden lore — rituals, symbols, things that shouldn't work",
+        "start": 10,
+        "max": 50,
+        "rules": "Knowledge of the unnatural. Used to recognize rites, symbols and entities — and to know what not to read aloud."
+      },
+      {
+        "key": "med",
+        "label": "Medicine",
+        "hint": "First aid — stopping bleeding, treating shock",
+        "start": 10,
+        "max": 50,
+        "rules": "Medical skill. Used to treat wounds, stabilize the dying and tell what's wrong with someone who came back different."
+      },
+      {
+        "key": "ner",
+        "label": "Nerve",
+        "hint": "Composure — keeping quiet and still when it counts",
+        "start": 10,
+        "max": 50,
+        "rules": "Self-control under terror. Used to stay silent, keep hands steady and act while afraid instead of freezing."
+      },
+      {
+        "key": "ste",
+        "label": "Stealth",
+        "hint": "Moving unseen — sneaking, hiding, breaking in",
+        "start": 10,
+        "max": 50,
+        "rules": "Quiet movement. Used to sneak past things, hide, pick locks and get into boarded-up places."
+      },
+      {
+        "key": "emp",
+        "label": "Empathy",
+        "hint": "Reading people — fear, lies, grief, guilt",
+        "start": 10,
+        "max": 50,
+        "rules": "Emotional intelligence. Used to calm panicking people, spot lies and get the living to say what they saw."
+      },
+      {
+        "key": "luc",
+        "label": "Luck",
+        "hint": "Fortune — the one break you didn't earn",
+        "start": 10,
+        "max": 50,
+        "rules": "Fortune and fate. Used to nudge uncertain outcomes and slip through narrow escapes."
+      }
+    ]
+  },
+  "trackers": [
+    {
+      "key": "time",
+      "hint": "Time of day",
+      "icon": "🔆",
+      "type": "text",
+      "show": "header",
+      "effects": "The current time of day.",
+      "rules": "Use exactly one of: Dawn, Morning, Noon, Afternoon, Evening, Dusk, Night. Advance it realistically as scenes pass; sleeping moves to the next morning.",
+      "start": "Night"
+    },
+    {
+      "key": "location",
+      "hint": "Current Location",
+      "icon": "📍",
+      "type": "text",
+      "show": "header",
+      "effects": "Where the hero currently is — street, building or woods.",
+      "rules": "Keep it short and specific, e.g. \"Blackwood Falls — Hollow Road\", \"Uncle's house, attic\". Update whenever the scene moves.",
+      "start": "Blackwood Falls"
+    },
+    {
+      "key": "quest",
+      "label": "Mystery",
+      "hint": "Current Mystery",
+      "icon": "🔎",
+      "type": "text",
+      "show": "header",
+      "effects": "The hero's single current mystery. Empty = no active mystery.",
+      "rules": "One short phrase, e.g. \"Find out what took the missing hikers\". Only ONE mystery at a time: when solved or abandoned, replace it, or leave empty."
+    },
+    {
+      "key": "level",
+      "label": "Lvl",
+      "hint": "Current Level",
+      "icon": "🏅",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's level. A higher level means a harder-to-kill survivor.",
+      "rules": "Rises when the hero earns enough exp.",
+      "start": 1
+    },
+    {
+      "key": "exp",
+      "label": "Exp",
+      "hint": "Experience points",
+      "icon": "✨",
+      "type": "number",
+      "show": "hero",
+      "effects": "Experience points toward the next level.",
+      "rules": "Award for surviving horrors, solving mysteries and uncovering truths. When exp reaches 100, the hero levels up and exp resets to 0.",
+      "max": 100,
+      "start": 0
+    },
+    {
+      "key": "hp",
+      "label": "HP",
+      "hint": "Hit Points",
+      "icon": "❤️",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's hit points. 0 means downed or at its mercy.",
+      "rules": "Decrease on damage — combat, traps, hazards. Increase on healing, rest or recovery.",
+      "max": "= end*2 + 20",
+      "start": "= end*2 + 20"
+    },
+    {
+      "key": "sanity",
+      "label": "Sanity",
+      "hint": "Grip on reality",
+      "icon": "🕯️",
+      "type": "number",
+      "show": "hero",
+      "effects": "The hero's grip on reality. Low sanity means delusions, dread and mistakes.",
+      "rules": "Erodes on horrors witnessed and sleepless nights; steadies with rest, light and grounding truths.",
+      "max": 100,
+      "start": 100
+    },
+    {
+      "key": "ammo",
+      "label": "Ammo",
+      "hint": "Bullets",
+      "icon": "🔫",
+      "type": "number",
+      "show": "hero",
+      "effects": "Ammunition for firearms. At 0 guns are dead weight.",
+      "rules": "Spent firing guns; found while scavenging and searching bodies.",
+      "start": 12
+    },
+    {
+      "key": "light",
+      "label": "Light",
+      "hint": "Light source",
+      "icon": "🔦",
+      "type": "number",
+      "show": "header",
+      "effects": "The hero's light — flashlight, lantern, phone. Darkness is where things hunt.",
+      "rules": "Drains while used in the dark; restored with fresh batteries or fuel.",
+      "max": 100,
+      "start": 100
+    },
+    {
+      "key": "cash",
+      "label": "Cash",
+      "hint": "Money",
+      "icon": "💵",
+      "type": "number",
+      "show": "header",
+      "effects": "The hero's money, in cash.",
+      "rules": "Increase from jobs and sales; decrease from purchases, bribes and fees.",
+      "start": 200
+    }
+  ],
+  "npcTrackers": [
+    {
+      "key": "trust",
+      "label": "Trust",
+      "hint": "Faith in the hero",
+      "icon": "🤝",
+      "type": "number",
+      "show": "profile",
+      "effects": "How much this character trusts the hero; high trust unlocks secrets and aid, low trust risks betrayal.",
+      "rules": "Moves when the hero keeps or breaks promises.",
+      "max": 100,
+      "start": 50
+    },
+    {
+      "key": "fear",
+      "label": "Fear",
+      "hint": "Terror",
+      "icon": "😨",
+      "type": "number",
+      "show": "profile",
+      "effects": "How terrified this character is; panic makes them scream, run or freeze.",
+      "rules": "Rises with horrors witnessed and being alone; eases with light, company and calm words.",
+      "max": 100,
+      "start": 10
+    },
+    {
+      "key": "sanity",
+      "label": "Sanity",
+      "hint": "Grip on reality",
+      "icon": "🧠",
+      "type": "number",
+      "show": "profile",
+      "effects": "This character's grip on reality; low sanity means delusions and dangerous ideas.",
+      "rules": "Erodes on horrors; steadies with rest and grounding.",
+      "max": 100,
+      "start": 90
+    }
+  ]
+}
