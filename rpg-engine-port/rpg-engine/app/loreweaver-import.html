@@ -346,7 +346,12 @@
       trackers: [], npcTrackers: [], npcs: []
     };
     await window.root.kv.worlds.set(id, world);
-    if (!idx.some(function (w) { return w.id === id; })) { idx.push({ id: id, name: name }); await window.root.kv.worlds.set("index", idx); }
+    if (!idx.some(function (w) { return w.id === id; })) {
+      // index entries carry the card fields the Worlds grid renders from (the engine's
+      // WorldStore.refreshIndex shape) — a bare {id,name} entry renders a letter placeholder
+      idx.push({ id: id, name: name, description: "", tags: [], nsfw: false, author: "", authorId: "", remix: null, origin: "", cover: cover, createdAt: now, updatedAt: now });
+      await window.root.kv.worlds.set("index", idx);
+    }
     const reg = await regRead();
     const prev = reg.cards[card.avatar];
     const recs = prev ? (prev.worlds || []) : [];
