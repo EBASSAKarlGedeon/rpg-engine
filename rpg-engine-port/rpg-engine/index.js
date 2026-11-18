@@ -98,6 +98,14 @@
 
   function init() {
     addLauncher();
+    // Preload the game iframe while hidden, so the first "Open RPG Engine" is instant
+    // (same renderer page just sits idle). Deferred so Loreweaver's own startup is
+    // not slowed; the overlay stays hidden until opened.
+    const preload = () => {
+      try { ensureOverlay(); if (!frame.getAttribute("src")) frame.setAttribute("src", APP_URL); } catch (e) {}
+    };
+    if (window.requestIdleCallback) window.requestIdleCallback(preload, { timeout: 15000 });
+    else setTimeout(preload, 3000);
     // The menu can be built after our script runs; retry for a while.
     let tries = 0;
     const timer = setInterval(() => {

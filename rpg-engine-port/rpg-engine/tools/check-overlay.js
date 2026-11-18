@@ -12,9 +12,12 @@ const { chromium } = require("playwright");
   await page.goto(url);
   await page.waitForSelector("#rpge-menu-entry", { timeout: 5000 }).catch(() => problems.push("menu entry was not added"));
   if (!(await page.locator("#rpge-launcher").count())) problems.push("launcher button missing");
-  if (await page.locator("#rpge-root").count()) problems.push("overlay should not exist before the first open");
+  // Preload: the overlay is created early (hidden) with the app iframe loading, so the
+  // first open is instant. It must exist but stay invisible before any click.
+  await page.waitForSelector("#rpge-root", { state: "attached", timeout: 8000 }).catch(() => problems.push("preloaded overlay missing"));
+  if (await page.locator("#rpge-root").isVisible()) problems.push("preloaded overlay should be hidden before the first open");
   await page.locator("#rpge-menu-entry").click();
-  await page.waitForTimeout(3500);
+  await page.waitForTimeout(1500);
   const visible = await page.locator("#rpge-root").isVisible();
   if (!visible) problems.push("overlay not visible after clicking the menu entry");
   const frame = page.frames().find((f) => f.url().includes("/app/index.html"));
