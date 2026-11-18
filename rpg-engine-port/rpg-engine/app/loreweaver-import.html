@@ -384,7 +384,10 @@
 
   async function renderChars() {
     const worldId = $("targetWorld").value;
-    if (!worldId) { $("chars").innerHTML = ""; return; }
+    if (!worldId) {
+      $("chars").innerHTML = '<p class="hint">Pick a target world above (create one in the game if you have none yet) — then the characters are listed here.</p>';
+      return;
+    }
     const reg = await regRead();
     const box = $("chars");
     box.innerHTML = cardList.length ? "" : "<p>No characters found in Loreweaver.</p>";
@@ -444,7 +447,10 @@
 
   async function renderBooks() {
     const worldId = $("targetWorld").value;
-    if (!worldId) { $("books").innerHTML = ""; return; }
+    if (!worldId) {
+      $("books").innerHTML = '<p class="hint">Pick a target world above — then the World Info books are listed here.</p>';
+      return;
+    }
     const reg = await regRead();
     const box = $("books");
     box.innerHTML = bookList.length ? "" : "<p>No World Info books found.</p>";
