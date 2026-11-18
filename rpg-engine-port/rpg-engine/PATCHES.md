@@ -47,12 +47,16 @@ other panes overlapping (user report 2026-11-18, browser recording). The codebas
 convention elsewhere is explicit `[hidden]` display rules (`.ce-dirty[hidden]`,
 `#tavernFab[hidden]`, …) — this one was simply missing upstream.
 
-**Change (1 rule):**
+**Change (2 rules):**
 
 ```css
 .ce-view[hidden] { display: none; }
+.ce-lore-aiwrap[hidden] { display: none; }   /* "Split text with AI" wrapper — same class of bug:
+                                                toggled via .hidden in world-editor.js, its
+                                                display:flex rule defeated the hidden attribute */
 ```
 
-**Impact when reverted:** editor tabs visually break for every world (not world-specific).
+**Impact when reverted:** editor tabs visually break for every world (not world-specific);
+the AI-split wrapper can never collapse in Lorebook/NPC/Stats/Trackers tabs.
 
-**Revert:** delete the rule.
+**Revert:** delete both rules.
