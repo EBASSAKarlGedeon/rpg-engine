@@ -23,6 +23,7 @@ const overlayPages = {};
 function makeOverlayPage(id) {
     const root = document.createElement("div");
     root.id = "rpge-page-" + id;
+    root.className = "rpge-page-root"; // styled by style.css (class-scoped, any overlay page)
     root.hidden = true;
     const bar = document.createElement("div");
     bar.className = "rpge-bridge-bar";
@@ -38,6 +39,7 @@ function makeOverlayPage(id) {
     bar.append(t, close);
     const frame = document.createElement("iframe");
     frame.id = "rpge-page-frame-" + id;
+    frame.className = "rpge-page-frame";
     frame.title = PAGE_TITLES[id];
     root.append(bar, frame);
     document.body.appendChild(root);

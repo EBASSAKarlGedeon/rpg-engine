@@ -1,8 +1,9 @@
-/* Loreweaver-bridge overlay (opened by the extension's "Open Loreweaver bridge" button).
-   Same-window iframe overlay, styled like the game overlay in
-   rpg-engine-port/rpg-engine/style.css but scoped to #rpge-bridge-*. */
+/* Loreweaver-bridge / imports overlay pages (opened by the extension's "Open Loreweaver
+   bridge" / "Import from Loreweaver" buttons). Same-window iframe overlays, styled like the
+   game overlay in rpg-engine-port/rpg-engine/style.css. Scoped by CLASS so any overlay page
+   can use it (the JS assigns class rpge-page-root / rpge-page-frame). */
 
-#rpge-bridge-root {
+.rpge-page-root {
   position: fixed;
   top: 0;
   left: 0;
@@ -18,8 +19,8 @@
   color: #e0d6b8;
   font-family: system-ui, "Segoe UI", sans-serif;
 }
-#rpge-bridge-root[hidden] { display: none; }
-#rpge-bridge-root .rpge-bridge-bar {
+.rpge-page-root[hidden] { display: none; }
+.rpge-page-root .rpge-bridge-bar {
   flex: 0 0 32px;
   height: 32px;
   display: flex;
@@ -29,8 +30,8 @@
   background: #141412;
   border-bottom: 1px solid #2a2520;
 }
-#rpge-bridge-root .rpge-bridge-title { font-size: 11px; letter-spacing: 0.16em; color: #8b9a6e; }
-#rpge-bridge-root .rpge-bridge-close {
+.rpge-page-root .rpge-bridge-title { font-size: 11px; letter-spacing: 0.16em; color: #8b9a6e; }
+.rpge-page-root .rpge-bridge-close {
   font: inherit;
   font-size: 12px;
   padding: 3px 10px;
@@ -40,9 +41,9 @@
   border-radius: 2px;
   cursor: pointer;
 }
-#rpge-bridge-root .rpge-bridge-close:hover { border-color: #8b9a6e; color: #8b9a6e; }
-#rpge-bridge-root .rpge-bridge-close:focus-visible { outline: 2px solid #8b9a6e; outline-offset: 2px; }
-#rpge-bridge-frame {
+.rpge-page-root .rpge-bridge-close:hover { border-color: #8b9a6e; color: #8b9a6e; }
+.rpge-page-root .rpge-bridge-close:focus-visible { outline: 2px solid #8b9a6e; outline-offset: 2px; }
+.rpge-page-frame {
   flex: 1 1 auto;
   width: 100%;
   min-height: 0;
