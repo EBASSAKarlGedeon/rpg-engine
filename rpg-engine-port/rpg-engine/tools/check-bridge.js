@@ -43,13 +43,24 @@ const staticSrv = http.createServer((req, res) => {
     return res.end(JSON.stringify({ token: "csrf-" + sid }));
   }
   if (url.pathname === "/api/settings/get") {
-    // production: served to any logged-in session; not CSRF-gated (GET)
-    res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({
-      settings: { extension_settings: { connectionManager: { selectedProfile: PROFILE.id, profiles: [PROFILE] } } },
-      openai_setting_names: Object.keys(PRESETS),
-      openai_settings: Object.values(PRESETS).map((p) => JSON.stringify(p)),
-    }));
+    // production: POST + CSRF (like the real endpoint); served to any logged-in session
+    if (req.method === "POST") {
+      let b = "";
+      req.on("data", (c) => (b += c));
+      return req.on("end", () => {
+        const token = req.headers["x-csrf-token"];
+        if (!cookies.sid || !sessions.has(cookies.sid) || token !== "csrf-" + cookies.sid) {
+          res.writeHead(403); return res.end();
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          settings: { extension_settings: { connectionManager: { selectedProfile: PROFILE.id, profiles: [PROFILE] } } },
+          openai_setting_names: Object.keys(PRESETS),
+          openai_settings: Object.values(PRESETS).map((p) => JSON.stringify(p)),
+        }));
+      });
+    }
+    res.writeHead(404); return res.end();
   }
   if (url.pathname === "/api/backends/chat-completions/generate" && req.method === "POST") {
     let body = "";

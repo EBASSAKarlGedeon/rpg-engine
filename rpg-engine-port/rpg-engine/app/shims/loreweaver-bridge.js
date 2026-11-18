@@ -71,10 +71,15 @@
   // ---- Loreweaver connection profiles + presets (from /api/settings/get, cached) ----
   let settingsPromise = null;
   let settingsAt = 0;
-  function getLoreweaverSettings() {
+  async function getLoreweaverSettings() {
     if (settingsPromise && Date.now() - settingsAt < SETTINGS_TTL) return settingsPromise;
     settingsAt = Date.now();
-    settingsPromise = fetch(new URL("/api/settings/get", location.origin), { credentials: "include" })
+    settingsPromise = fetch(new URL("/api/settings/get", location.origin), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": await getToken() },
+      body: JSON.stringify({}),
+    })
       .then((r) => { if (!r.ok) throw new Error("/api/settings/get returned " + r.status); return r.json(); })
       .then((data) => {
         const es = (data.settings && data.settings.extension_settings) || {};
