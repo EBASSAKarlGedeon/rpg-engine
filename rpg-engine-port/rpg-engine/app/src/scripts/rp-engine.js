@@ -572,7 +572,7 @@ function bankedOffscreenEvents(state, rosterSet) {
 }
 
 export class RPEngine {
-  constructor({ genText, promptText, loreEntries = [], scenarioText = "", startText = "", startMode = "prompt", vibeText = "", trackerDefs = [], npcTrackerDefs = [], statDefs = [], worldNpcs = [], checkIncludeTrackers = false, checkIncludeNpcTrackers = false, checkTrackerKeys = [], checkNpcTrackerKeys = [], useCheckInstruction = false, checkInstruction = "" }) {
+  constructor({ genText, promptText, loreEntries = [], scenarioText = "", startText = "", startMode = "prompt", vibeText = "", worldDescriptionText = "", trackerDefs = [], npcTrackerDefs = [], statDefs = [], worldNpcs = [], checkIncludeTrackers = false, checkIncludeNpcTrackers = false, checkTrackerKeys = [], checkNpcTrackerKeys = [], useCheckInstruction = false, checkInstruction = "" }) {
     this.lastInstruction = null;
     this.lastTrackerInstruction = null;
     this.lastNpcTrackerInstruction = null;
@@ -599,6 +599,9 @@ export class RPEngine {
     // start text; "verbatim" posts the exact start text as the turn-0 message (see runGmTurn).
     this.startMode = startMode === "verbatim" ? "verbatim" : "prompt";
     this.vibeText = vibeText;
+    // [rpge-patch 004] The world's canon description (card description+personality on imports) —
+    // always fed, sits between the vibe and the premise so general canon precedes premise canon.
+    this.worldDescriptionText = worldDescriptionText;
     this.trackerDefs = trackerDefs; // from the loaded world
     this.npcTrackerDefs = npcTrackerDefs; // from the loaded world — per-NPC tracked values (see README §6.3.1)
     this.statDefs = statDefs; // from the loaded world (player-owned attributes)
@@ -737,6 +740,9 @@ export class RPEngine {
     // vibeText is the tone the GM must keep in every reply — kept separate from the
     // narrator prompt so devs can tune the vibe without touching the (immutable) system prompt.
     if (this.vibeText) parts.push("NARRATIVE VIBE (tone to maintain in every reply):\n" + sub(this.vibeText));
+    // [rpge-patch 004] World description — always-canon about the world and its people, fed every
+    // reply before the premise so the GM reads general canon first.
+    if (this.worldDescriptionText) parts.push("WORLD DESCRIPTION (always true — canon about the world and its people):\n" + sub(this.worldDescriptionText));
     // The current location tracker value (used by the lore selector and the SURROUNDINGS section).
     const curLocTxt = locationValue(this.trackerDefs, getCurrentTrackers(state, this.trackerDefs));
     // The same "what is the scene about" text the lorebook matcher uses, used to decide which NPCs

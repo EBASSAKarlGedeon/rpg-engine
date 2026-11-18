@@ -309,7 +309,7 @@ function makeEngineFactory(world, promptText) {
     genText, promptText,
     loreEntries: world.lorebook, scenarioText: world.scenario, startText: world.start,
     startMode: world.startMode,
-    vibeText: world.narrativeVibe, trackerDefs: world.trackerDefs, npcTrackerDefs: world.npcTrackerDefs,
+    vibeText: world.narrativeVibe, worldDescriptionText: world.worldDescription || "", trackerDefs: world.trackerDefs, npcTrackerDefs: world.npcTrackerDefs,
     statDefs: world.statDefs, worldNpcs: world.npcs,
     checkIncludeTrackers: world.statsCfg && world.statsCfg.checkIncludeTrackers,
     checkIncludeNpcTrackers: world.statsCfg && world.statsCfg.checkIncludeNpcTrackers,

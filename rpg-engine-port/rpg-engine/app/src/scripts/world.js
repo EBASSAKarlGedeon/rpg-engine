@@ -533,6 +533,9 @@ export function normalizeWorld(obj) {
   const world = {
     meta: normalizeMeta(meta, id, name, warnings),
     narrativeVibe: str(obj.narrativeVibe),
+    // [rpge-patch 004] ST-card provenance: the card's description+personality canon. Always fed
+    // to the GM (see rp-engine.js) — separate from meta.description, which is card display text.
+    worldDescription: str(obj.worldDescription),
     lorebook: normalizeLorebook(obj.lorebook),
     scenario: str(obj.scenario),
     start: starts[0] ? starts[0].text : str(obj.start),
@@ -642,6 +645,7 @@ export function worldToFile(world) {
     version: WORLD_VERSION,
     meta: fileMeta,
     narrativeVibe: world.narrativeVibe,
+    worldDescription: world.worldDescription || "",
     lorebook: (world.lorebook || []).map((e) => ({
       title: e.title || "", type: e.type || "lore", activation: e.activation || "always",
       keywords: e.keywords || [], content: e.content || ""

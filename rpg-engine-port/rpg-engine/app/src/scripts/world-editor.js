@@ -2209,6 +2209,7 @@ function renderCover(v) {
     v.innerHTML = `
       <div class="ce-sec"><span>world story</span></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("narrative vibe", "The GM’s narrative tone, injected into every reply.")}</span><textarea id="ceVibe" rows="2" placeholder="e.g. funny, adventure, exploration."></textarea></div>
+      <div class="ce-fld"><span>${infoTipLabelHtml("world description", "Canon about the world and its people, fed to the GM every reply — unlike the Basics tab’s Description, which is only card display text.")}</span><textarea id="ceWDesc" rows="5" placeholder="The world and its people as the GM must always know them."></textarea></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("scenario", "Permanent premise, injected into every GM reply. {{user}} becomes the hero’s name.")}</span><textarea id="ceScen" rows="6" placeholder="The world's standing premise — what is always true of this story."></textarea></div>
       <div class="ce-sec ce-lore-head"><span>openings</span>
         <span class="ce-lore-toolbtns">
@@ -2223,8 +2224,10 @@ function renderCover(v) {
       </div>
       <div class="ce-split-empty dim" hidden>No openings yet — add one above.</div>`;
     v.querySelector("#ceVibe").value = M.narrativeVibe || "";
+    v.querySelector("#ceWDesc").value = M.worldDescription || "";
     v.querySelector("#ceScen").value = M.scenario || "";
     v.querySelector("#ceVibe").oninput = (e) => { M.narrativeVibe = e.target.value; markTouched(); };
+    v.querySelector("#ceWDesc").oninput = (e) => { M.worldDescription = e.target.value; markTouched(); };
     v.querySelector("#ceScen").oninput = (e) => { M.scenario = e.target.value; markTouched(); };
     v.querySelector(".ce-add-start").onclick = () => {
       addOpening();
@@ -2243,6 +2246,7 @@ function renderCover(v) {
     v.innerHTML = `
       <div class="ce-sec"><span>world story</span></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("narrative vibe", "The GM’s narrative tone, injected into every reply.")}</span><textarea id="ceVibe" rows="2" placeholder="e.g. funny, adventure, exploration."></textarea></div>
+      <div class="ce-fld"><span>${infoTipLabelHtml("world description", "Canon about the world and its people, fed to the GM every reply — unlike the Basics tab’s Description, which is only card display text.")}</span><textarea id="ceWDesc" rows="5" placeholder="The world and its people as the GM must always know them."></textarea></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("scenario", "Permanent premise, injected into every GM reply. {{user}} becomes the hero’s name.")}</span><textarea id="ceScen" rows="6" placeholder="The world's standing premise — what is always true of this story."></textarea></div>
       <div class="ce-sec ce-lore-head"><span>opening</span>
         <span class="ce-lore-toolbtns">
@@ -2253,8 +2257,10 @@ function renderCover(v) {
       <div class="ce-note ce-sec-note">One opening — every adventure begins here. Add another when you want new games to pick between openings before hero creation.</div>
       <div class="ce-fld"><div class="ce-start-head"><span>${infoTipLabelHtml("opening text", startTipFor(mode))}</span><span class="ce-start-verb">${infoTipLabelHtml("verbatim", "Off (default): the GM writes the opening from your start text, which stays as context for the first 20 turns. On: your exact start text opens the story at turn 0, with no AI generation.")}<button type="button" class="ui-sw" data-fverb role="switch" aria-checked="${mode === "verbatim" ? "true" : "false"}" aria-label="Verbatim opening"><span class="sw-track"><span class="sw-knob"></span></span></button></span></div><textarea id="ceStartText" rows="9" placeholder="How the adventure begins. {{user}} becomes the hero’s name.">${esc(s.text || "")}</textarea></div>`;
     v.querySelector("#ceVibe").value = M.narrativeVibe || "";
+    v.querySelector("#ceWDesc").value = M.worldDescription || "";
     v.querySelector("#ceScen").value = M.scenario || "";
     v.querySelector("#ceVibe").oninput = (e) => { M.narrativeVibe = e.target.value; markTouched(); };
+    v.querySelector("#ceWDesc").oninput = (e) => { M.worldDescription = e.target.value; markTouched(); };
     v.querySelector("#ceScen").oninput = (e) => { M.scenario = e.target.value; markTouched(); };
     v.querySelector("#ceStartText").oninput = (e) => { s.text = String(e.target.value || ""); syncLegacyStart(); markTouched(); };
     const verbBtn = v.querySelector("[data-fverb]");

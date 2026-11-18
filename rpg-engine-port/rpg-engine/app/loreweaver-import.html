@@ -115,12 +115,12 @@
       var img = new Image();
       img.onload = function () {
         try {
-          var MAX = 512, w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+          var MAX = 1024, w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
           var s = Math.min(1, MAX / Math.max(w, h));
           var cv = document.createElement("canvas");
           cv.width = Math.max(1, Math.round(w * s)); cv.height = Math.max(1, Math.round(h * s));
           cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
-          resolve(cv.toDataURL("image/jpeg", 0.85));
+          resolve(cv.toDataURL("image/jpeg", 0.92));
         } catch (e) { resolve(""); }
       };
       img.onerror = function () { resolve(""); };
@@ -214,9 +214,6 @@
   function buildCardLore(card) {
     const lore = [];
     const titles = [];
-    const rules = [card.description, card.personality, card.scenario]
-      .map(function (s) { return String(s || "").trim(); }).filter(Boolean).join("\n\n");
-    if (rules) { lore.push({ title: "Rules", type: "law", activation: "always", keywords: [], content: rules }); titles.push("Rules"); }
     const book = (card.data && card.data.character_book) || card.character_book || null;
     const entries = book && Array.isArray(book.entries) ? book.entries : [];
     for (const e of entries) {
@@ -261,13 +258,45 @@
     const raw = await loadWorldRaw(w.worldId);
     if (!raw) return;
     const fresh = buildCardLore(card);
+    const wf = cardWorldFields(card);
+    // scope-correct migration (v2.6): the old v2.5 import put description+personality+scenario in
+    // one always-on "Rules" law entry — remove exactly that shape (always law titled Rules, no
+    // keywords) and re-map to the first-class fields. A player-authored "Rules" law would also be
+    // caught by this, but a card Update is an explicit act on that import, so this stays safe.
+    raw.lorebook = (Array.isArray(raw.lorebook) ? raw.lorebook : []).filter(function (e) {
+      return !(e && typeof e === "object" && e.type === "law" && e.activation === "always"
+        && String(e.title || "").trim().toLowerCase() === "rules" && (!e.keywords || !e.keywords.length));
+    });
     const titles = new Set((w.titles || []).map(function (t) { return String(t || "").toLowerCase(); }));
-    raw.lorebook = Array.isArray(raw.lorebook) ? raw.lorebook : [];
     raw.lorebook = raw.lorebook.filter(function (e) {
       const t = e && typeof e === "object" ? String(e.title || "").toLowerCase() : null;
       return t === null || !titles.has(t);
     });
     raw.lorebook.push(...fresh.lore);
+    // first-class fields (overwrite only with fresh content — never blank game-side edits)
+    if (wf.story) raw.worldDescription = wf.story;
+    if (wf.scenario) raw.scenario = wf.scenario;
+    if (wf.vibe) raw.narrativeVibe = (String(raw.narrativeVibe || "").trim())
+      ? (String(raw.narrativeVibe).trim() + "\n\n---\n\n" + wf.vibe) : wf.vibe;
+    if (wf.tags.length) raw.meta.tags = wf.tags;
+    if (wf.nsfw) raw.meta.nsfw = true;
+    if (wf.authorNotes) raw.meta.authorNotes = wf.authorNotes;
+    // openings: keep everything not imported by us (custom openings + any game-side one),
+    // re-append the fresh greetings (custom entries ride last, engine convention)
+    const prevStartIds = new Set((w.startIds || []).map(String));
+    const freshIds = new Set(wf.starts.map(function (s) { return s.id; }));
+    const starts = (Array.isArray(raw.starts) ? raw.starts : [])
+      .filter(function (s) { return s && typeof s === "object" && s.custom !== true; })
+      .filter(function (s) { return !(s.id && (prevStartIds.has(String(s.id)) || freshIds.has(String(s.id)))); });
+    if (!Array.isArray(raw.starts) && String(raw.start || "").trim()) {
+      // legacy plain-text opening that isn't ours (our v2.5 imports wrote an empty start)
+      starts.push({ id: "start", title: "", description: "", text: String(raw.start).trim(), mode: raw.startMode === "verbatim" ? "verbatim" : "prompt" });
+    }
+    const customs = (Array.isArray(raw.starts) ? raw.starts : []).filter(function (s) { return s && s.custom === true; });
+    raw.starts = starts.concat(wf.starts).concat(customs);
+    raw.start = raw.starts[0] ? raw.starts[0].text : "";
+    raw.startMode = raw.starts[0] ? (raw.starts[0].mode || "prompt") : "prompt";
+    w.startIds = wf.starts.map(function (s) { return s.id; });
     await window.root.kv.worlds.set(w.worldId, raw);
     w.titles = fresh.titles;
   }
@@ -322,11 +351,52 @@
   // "Add as world": the card BECOMES a new game world — rules text as an always-on law
   // entry, embedded book cast as character entries. The game's Worlds list picks it up
   // through the worlds index.
+  // [v2.6 scope-correct mapping — user decisions 2026-11-18]
+  // description + personality → worldDescription (new world field, always-canon GM block)
+  // scenario → world.scenario (the dedicated WORLD PREMISE slot)
+  // first_mes → opening 1, alternate_greetings → openings 2..N (verbatim = the turn-0 message)
+  // system_prompt → narrativeVibe; creator_notes → meta.authorNotes; tags → meta.tags (nsfw → meta.nsfw)
+  // dropped (no engine slot): mes_example, post_history_instructions, depth_prompt, talkativeness, regex_scripts
+  function cardWorldFields(card) {
+    const story = [card.description, card.personality]
+      .map(function (s) { return String(s || "").trim(); }).filter(Boolean).join("\n\n");
+    const alt = (Array.isArray(card.alternate_greetings) ? card.alternate_greetings : null)
+      || ((card.data && Array.isArray(card.data.alternate_greetings)) ? card.data.alternate_greetings : []) || [];
+    const greetings = [card.first_mes].concat(alt)
+      .map(function (s) { return String(s || "").trim(); }).filter(Boolean);
+    const starts = greetings.map(function (text, i) {
+      return i === 0
+        ? { id: "start", title: "", description: "", text: text, mode: "verbatim" }
+        : { id: "greeting-" + (i + 1), title: "Greeting " + (i + 1), description: "", text: text, mode: "verbatim" };
+    });
+    const rawTags = [].concat(Array.isArray(card.tags) ? card.tags : [], (card.data && Array.isArray(card.data.tags)) ? card.data.tags : [])
+      .map(function (s) { return String(s || "").trim(); }).filter(Boolean);
+    const seen = new Set(); const tags = [];
+    let nsfw = false;
+    for (const t of rawTags) {
+      const low = t.toLowerCase();
+      if (low === "nsfw") { nsfw = true; continue; }
+      if (low === "remix" || seen.has(low)) continue;
+      seen.add(low); tags.push(t);
+    }
+    const authorNotes = String(card.creator_notes || (card.data && card.data.creator_notes) || card.creatorcomment || "").trim();
+    return {
+      story: story,
+      scenario: String(card.scenario || "").trim(),
+      vibe: String(card.system_prompt || (card.data && card.data.system_prompt) || "").trim(),
+      starts: starts,
+      tags: tags.slice(0, 12),
+      nsfw: nsfw,
+      authorNotes: authorNotes.slice(0, 2000)
+    };
+  }
+
   async function importCardAsWorld(card) {
     const name = String(card.name || "").trim();
     if (!name) throw new Error("card has no name");
     const fresh = buildCardLore(card);
-    if (!fresh.lore.length) throw new Error("card has no description and no embedded book to import");
+    const wf = cardWorldFields(card);
+    if (!fresh.lore.length && !wf.story) throw new Error("card has no description and no embedded book to import");
     let idx = [];
     try { idx = (await window.root.kv.worlds.get("index")) || []; } catch (e) {}
     if (!Array.isArray(idx)) idx = [];
@@ -336,10 +406,14 @@
     const cover = card.avatar ? await toCoverDataUrl(cardThumbUrl(card.avatar)) : "";
     const world = {
       format: "mno-world", version: 1,
-      meta: { id: id, name: name, description: "", author: "", authorId: "", tags: [], nsfw: false, commentsOff: false, cover: cover, authorNotes: "", createdAt: now, updatedAt: now },
-      narrativeVibe: "",
+      meta: { id: id, name: name, description: "", author: "", authorId: "", tags: wf.tags, nsfw: wf.nsfw, commentsOff: false, cover: cover, authorNotes: wf.authorNotes, createdAt: now, updatedAt: now },
+      worldDescription: wf.story,
+      narrativeVibe: wf.vibe,
       lorebook: fresh.lore,
-      scenario: "", start: "", startMode: "prompt",
+      scenario: wf.scenario,
+      start: wf.starts.length ? wf.starts[0].text : "",
+      startMode: wf.starts.length ? wf.starts[0].mode : "prompt",
+      starts: wf.starts,
       imageStyleTags: "", imageNegativeTags: "",
       imageIncludeTrackers: false, imageIncludeNpcTrackers: false, imageTrackerKeys: [], imageNpcTrackerKeys: [],
       stats: { pointsPerLevel: 2, ccBudget: 12, ccFloor: 5, ccCeiling: 20, averageThreshold: 10, exceptionalThreshold: 15, modStep: 5, dieSides: 20, useStatModFormula: false, statModFormula: "", checkIncludeTrackers: false, checkIncludeNpcTrackers: false, checkTrackerKeys: [], checkNpcTrackerKeys: [], useCheckInstruction: false, checkInstruction: "" },
@@ -349,7 +423,7 @@
     if (!idx.some(function (w) { return w.id === id; })) {
       // index entries carry the card fields the Worlds grid renders from (the engine's
       // WorldStore.refreshIndex shape) — a bare {id,name} entry renders a letter placeholder
-      idx.push({ id: id, name: name, description: "", tags: [], nsfw: false, author: "", authorId: "", remix: null, origin: "", cover: cover, createdAt: now, updatedAt: now });
+      idx.push({ id: id, name: name, description: "", tags: wf.tags, nsfw: wf.nsfw, author: "", authorId: "", remix: null, origin: "", cover: cover, createdAt: now, updatedAt: now });
       await window.root.kv.worlds.set("index", idx);
     }
     const reg = await regRead();

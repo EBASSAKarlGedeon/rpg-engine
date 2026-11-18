@@ -72,6 +72,7 @@ const srv = http.createServer((req, res) => {
   const cards = [
     { name: "Kael", avatar: "kael.png", description: "A grim mercenary.", personality: "Cold, loyal.", scenario: "He owes you a debt." },
     { name: "Rulesville", avatar: "rules.png", description: "<SYSTEM DIRECTIVE: RULES ENGINE> Be fair.", personality: "", scenario: "The town has secrets.",
+      first_mes: "You arrive in Rulesville.", alternate_greetings: ["You wake up in the charter hall."], system_prompt: "Keep rulings fair.", creator_notes: "A rules demo.", tags: ["fantasy", "nsfw"],
       data: { character_book: { entries: [
         { keys: ["Anna"], secondary_keys: [], comment: "Anna", content: "Anna runs the inn.", constant: false, enabled: true },
         { keys: [], secondary_keys: [], comment: "Town charter", content: "The charter is always in force.", constant: true, enabled: true },
@@ -239,11 +240,18 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const rw = await page.evaluate(async () => await window.root.kv.worlds.get("rulesville"));
   if (!rw || rw.format !== "mno-world" || rw.version !== 1) problems.push("card-world: file form wrong: " + JSON.stringify(rw && { format: rw && rw.format, version: rw && rw.version }));
   if (!rw || !rw.meta || rw.meta.name !== "Rulesville" || rw.meta.id !== "rulesville") problems.push("card-world: meta wrong: " + JSON.stringify(rw && rw.meta));
-  if (!rw || !Array.isArray(rw.lorebook) || rw.lorebook.length !== 3) problems.push("card-world: lorebook count wrong: " + (rw && rw.lorebook && rw.lorebook.length));
+  if (!rw || !Array.isArray(rw.lorebook) || rw.lorebook.length !== 2) problems.push("card-world: lorebook count wrong: " + (rw && rw.lorebook && rw.lorebook.length));
   const rl = (rw && rw.lorebook) || [];
-  if (!rl[0] || rl[0].title !== "Rules" || rl[0].type !== "law" || rl[0].activation !== "always" || rl[0].content !== "<SYSTEM DIRECTIVE: RULES ENGINE> Be fair.\n\nThe town has secrets.") problems.push("card-world: rules entry wrong: " + JSON.stringify(rl[0]));
-  if (!rl[1] || rl[1].title !== "Anna" || rl[1].type !== "character" || rl[1].activation !== "keywords" || JSON.stringify(rl[1].keywords) !== JSON.stringify(["Anna"]) || rl[1].content !== "Anna runs the inn.") problems.push("card-world: keyword cast entry wrong: " + JSON.stringify(rl[1]));
-  if (!rl[2] || rl[2].title !== "Town charter" || rl[2].activation !== "always" || rl[2].content !== "The charter is always in force.") problems.push("card-world: constant cast entry wrong: " + JSON.stringify(rl[2]));
+  if (!rl[0] || rl[0].title !== "Anna" || rl[0].type !== "character" || rl[0].activation !== "keywords" || JSON.stringify(rl[0].keywords) !== JSON.stringify(["Anna"]) || rl[0].content !== "Anna runs the inn.") problems.push("card-world: keyword cast entry wrong: " + JSON.stringify(rl[0]));
+  if (!rl[1] || rl[1].title !== "Town charter" || rl[1].activation !== "always" || rl[1].content !== "The charter is always in force.") problems.push("card-world: constant cast entry wrong: " + JSON.stringify(rl[1]));
+  if (rl.some((e) => e && String(e.title).toLowerCase() === "rules")) problems.push("card-world: auto Rules law entry should be gone in v2.6 mapping");
+  if (!rw || rw.worldDescription !== "<SYSTEM DIRECTIVE: RULES ENGINE> Be fair.") problems.push("card-world: worldDescription wrong: " + JSON.stringify(rw && rw.worldDescription));
+  if (!rw || rw.scenario !== "The town has secrets.") problems.push("card-world: scenario not mapped to the WORLD PREMISE slot");
+  if (!rw || rw.narrativeVibe !== "Keep rulings fair.") problems.push("card-world: system_prompt not mapped to narrativeVibe");
+  if (!rw || !Array.isArray(rw.starts) || rw.starts.length !== 2 || rw.starts[0].text !== "You arrive in Rulesville." || rw.starts[0].mode !== "verbatim"
+    || rw.starts[1].title !== "Greeting 2" || rw.starts[1].text !== "You wake up in the charter hall." || rw.starts[1].mode !== "verbatim") problems.push("card-world: openings wrong: " + JSON.stringify(rw && rw.starts));
+  if (!rw || rw.start !== "You arrive in Rulesville." || rw.startMode !== "verbatim") problems.push("card-world: legacy start mirror wrong");
+  if (!rw || !rw.meta || rw.meta.authorNotes !== "A rules demo." || rw.meta.nsfw !== true || JSON.stringify(rw.meta.tags) !== JSON.stringify(["fantasy"])) problems.push("card-world: meta authorNotes/nsfw/tags wrong: " + JSON.stringify(rw && rw.meta && { a: rw.meta.authorNotes, n: rw.meta.nsfw, t: rw.meta.tags }));
   if (rw && (rw.npcs.length !== 0 || rw.trackers.length !== 0)) problems.push("card-world: npcs/trackers should be empty");
   if (!rw || !rw.meta || !/^data:image\/(jpeg|png);base64,/.test(rw.meta.cover || "")) problems.push("card-world: cover should be the card image as a dataURL: " + JSON.stringify(rw && rw.meta && String(rw.meta.cover).slice(0, 40)));
   const idx2 = await page.evaluate(async () => await window.root.kv.worlds.get("index"));
@@ -251,7 +259,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!idxEntry || idxEntry.name !== "Rulesville" || !/^data:image\//.test(idxEntry.cover || "")) problems.push("card-world: index entry wrong (missing cover/meta): " + JSON.stringify(idxEntry));
   reg = await page.evaluate(async () => await window.root.kv.rpg.get("lwImports"));
   const rwReg = reg && reg.cards && reg.cards["rules.png"];
-  if (!rwReg || !rwReg.worlds[0] || rwReg.worlds[0].worldId !== "rulesville" || rwReg.worlds[0].asWorld !== true || JSON.stringify(rwReg.worlds[0].titles) !== JSON.stringify(["Rules", "Anna", "Town charter"])) problems.push("card-world: registry wrong: " + JSON.stringify(rwReg));
+  if (!rwReg || !rwReg.worlds[0] || rwReg.worlds[0].worldId !== "rulesville" || rwReg.worlds[0].asWorld !== true || JSON.stringify(rwReg.worlds[0].titles) !== JSON.stringify(["Anna", "Town charter"])) problems.push("card-world: registry wrong: " + JSON.stringify(rwReg));
   const selAfter = await page.$eval("#targetWorld", (s) => s.value);
   if (selAfter !== "rulesville") problems.push("card-world: target world did not switch to the new world: " + selAfter);
 
@@ -268,14 +276,20 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
   if (!world || !world.npcs.some((n) => n && n.name === "Rulesville" && n.persona === "<SYSTEM DIRECTIVE: RULES ENGINE> Be fair.")) problems.push("card-world: NPC not added to w1 on mixed update");
   const rwAfter = await page.evaluate(async () => await window.root.kv.worlds.get("rulesville"));
-  if (!rwAfter || rwAfter.lorebook.length !== 3) problems.push("card-world: update duplicated world lorebook: " + (rwAfter && rwAfter.lorebook.length));
+  if (!rwAfter || rwAfter.lorebook.length !== 2) problems.push("card-world: update duplicated world lorebook: " + (rwAfter && rwAfter.lorebook.length));
+  if (rwAfter && rwAfter.lorebook.some((e) => String(e.title).toLowerCase() === "rules")) problems.push("card-world: update re-added the Rules law entry");
+  if (!rwAfter || rwAfter.worldDescription !== "<SYSTEM DIRECTIVE: RULES ENGINE> Be fair.") problems.push("card-world: update lost worldDescription");
+  if (!rwAfter || rwAfter.narrativeVibe !== "Keep rulings fair.\n\n---\n\nKeep rulings fair.") problems.push("card-world: update vibe append wrong: " + JSON.stringify(rwAfter && rwAfter.narrativeVibe));
+  if (!rwAfter || !Array.isArray(rwAfter.starts) || rwAfter.starts.length !== 2 || rwAfter.starts[0].text !== "You arrive in Rulesville.") problems.push("card-world: update openings wrong: " + JSON.stringify(rwAfter && rwAfter.starts));
 
   // a card WITHOUT an embedded book still becomes a world (rules only)
   await page.evaluate((i) => { document.querySelectorAll("#chars .prow")[i].querySelector("button.secondary").click(); }, rvRow === 0 ? 1 : 0); // Kael row's world button
   await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Created world"), { timeout: 8000 });
   const kw = await page.evaluate(async () => await window.root.kv.worlds.get("kael"));
   if (!kw || !kw.meta || kw.meta.name !== "Kael") problems.push("card-world (no book): world missing: " + JSON.stringify(kw && kw.meta));
-  if (!kw || kw.lorebook.length !== 1 || kw.lorebook[0].title !== "Rules" || kw.lorebook[0].content !== "A grim mercenary.\n\nCold, loyal.\n\nHe owes you a debt.") problems.push("card-world (no book): rules entry wrong: " + JSON.stringify(kw && kw.lorebook));
+  if (!kw || (Array.isArray(kw.lorebook) && kw.lorebook.length)) problems.push("card-world (no book): lorebook should be empty in the v2.6 mapping");
+  if (!kw || kw.worldDescription !== "A grim mercenary.\n\nCold, loyal.") problems.push("card-world (no book): worldDescription wrong: " + JSON.stringify(kw && kw.worldDescription));
+  if (!kw || !kw.meta || kw.meta.name !== "Kael") problems.push("card-world (no book): world missing: " + JSON.stringify(kw && kw.meta));
 
   // ---- World Info -> lorebook ----
   await page.waitForSelector("#books .prow", { timeout: 8000 });
