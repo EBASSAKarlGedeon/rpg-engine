@@ -9,7 +9,16 @@ export async function mountImportsPage(pane, ctx) {
   pane.innerHTML = `
     <style>
       .lwimp { max-width: 760px; }
+      /* Internal tab strip for the three import flows — styled after the Worlds header
+         action buttons (.hm-act): boxed, letterspaced uppercase, accent when active. */
+      .lwimp-tabs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 8px 2px 10px; }
+      .lwimp-tab { background: transparent; border: 1px solid var(--border, #2a2520); color: var(--muted, #a89c82); font: inherit; font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; font-weight: 600; padding: 8px 12px; border-radius: 2px; cursor: pointer; white-space: nowrap; }
+      .lwimp-tab:hover { color: var(--text, #e0d6b8); border-color: var(--accent, #8b9a6e); }
+      .lwimp-tab.on { color: var(--accent, #8b9a6e); border-color: var(--accent, #8b9a6e); background: rgba(139,154,110,.13); }
+      .lwimp-tab[hidden], .lwimp-pane[hidden], .lwimp-worldbox[hidden] { display: none; }
+      .lwimp-worldbox { margin: 0 2px 6px; }
       .lwimp h2.lwimp-h { font-size: 15px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin: 30px 0 8px; }
+      .lwimp-pane > h2.lwimp-h:first-child { margin-top: 14px; }
       .lwimp p { color: var(--muted, #a89c82); }
       .lwimp .hint { font-size: 13px; color: var(--muted2, #8a8070); margin-top: 4px; }
       .lwimp .prow { display: flex; align-items: center; gap: 14px; padding: 12px 10px; border: 1px solid var(--border, #2a2520); border-radius: 4px; margin-top: 10px; background: var(--panel, #161512); }
@@ -32,38 +41,66 @@ export async function mountImportsPage(pane, ctx) {
       .lwimp code { color: var(--text, #e0d6b8); background: var(--panel2, #1a1a18); padding: 1px 5px; }
     </style>
     <div class="lwimp">
-      <h2 class="lwimp-h" style="margin-top:6px">Personas → hero library</h2>
-      <p>Import your <b>Loreweaver personas</b> as saved heroes. A linked snapshot is created in the
-      game's hero library — forge a hero, and <b>Load</b> it from the library in any world. Mapping:
-      name → <b>Name</b>, description → <b>Persona</b>, avatar → <b>Portrait</b>; the other bio fields
-      stay blank for you to fill in the game (stats are always per-world and never imported).</p>
-      <p class="hint">The import keeps a link to the source persona. Come back here to check for
-      changes — updating overwrites only the imported fields (Name, Persona, Portrait), never
-      anything you added in the game.</p>
-      <div id="lwimpList">Loading personas…</div>
-
-      <h2 class="lwimp-h">Character cards → world NPCs</h2>
-      <p>Add a Loreweaver <b>character</b> as a standing NPC in one of the game's worlds. Mapping:
-      name → <b>Name</b>, description + personality → <b>Persona</b>, scenario → <b>Extra
-      details</b>, card image → avatar. Fill the rest (race, appearance…) in the game's World
-      Editor. New adventures see the NPC at once; a RUNNING adventure picks it up on its next
-      load.</p>
-      <label class="lbl" for="lwimpTargetWorld">Target world</label>
-      <select id="lwimpTargetWorld"><option value="">Loading worlds…</option></select>
-      <div id="lwimpChars">Loading characters…</div>
-
-      <h2 class="lwimp-h">World Info → world lorebook</h2>
-      <p>Copy a Loreweaver <b>World Info</b> book into the selected world's lorebook. Keywords
-      (secondary keys merged in) → triggers, constant entries → always-on, comment → title.
-      ST macros like <code>{{user}}</code>/<code>{{char}}</code> stay literal — edit them in the
-      World Editor if needed.</p>
-      <div id="lwimpBooks">Loading World Info…</div>
-
+      <div class="lwimp-tabs" role="tablist">
+        <button type="button" class="lwimp-tab" data-tab="personas">👤 Personas → Heroes</button>
+        <button type="button" class="lwimp-tab" data-tab="cards">🎭 Cards → NPCs</button>
+        <button type="button" class="lwimp-tab" data-tab="books">📖 World Info → Lore</button>
+      </div>
+      <div class="lwimp-worldbox" id="lwimpWorldBox" hidden>
+        <label class="lbl" for="lwimpTargetWorld">Target world</label>
+        <select id="lwimpTargetWorld"><option value="">Loading worlds…</option></select>
+      </div>
+      <div class="lwimp-pane" data-pane="personas">
+        <h2 class="lwimp-h" style="margin-top:6px">Personas → hero library</h2>
+        <p>Import your <b>Loreweaver personas</b> as saved heroes. A linked snapshot is created in the
+        game's hero library — forge a hero, and <b>Load</b> it from the library in any world. Mapping:
+        name → <b>Name</b>, description → <b>Persona</b>, avatar → <b>Portrait</b>; the other bio fields
+        stay blank for you to fill in the game (stats are always per-world and never imported).</p>
+        <p class="hint">The import keeps a link to the source persona. Come back here to check for
+        changes — updating overwrites only the imported fields (Name, Persona, Portrait), never
+        anything you added in the game.</p>
+        <div id="lwimpList">Loading personas…</div>
+      </div>
+      <div class="lwimp-pane" data-pane="cards">
+        <h2 class="lwimp-h" style="margin-top:6px">Character cards → world NPCs</h2>
+        <p>Add a Loreweaver <b>character</b> as a standing NPC in one of the game's worlds. Mapping:
+        name → <b>Name</b>, description + personality → <b>Persona</b>, scenario → <b>Extra
+        details</b>, card image → avatar. Fill the rest (race, appearance…) in the game's World
+        Editor. New adventures see the NPC at once; a RUNNING adventure picks it up on its next
+        load.</p>
+        <div id="lwimpChars">Loading characters…</div>
+      </div>
+      <div class="lwimp-pane" data-pane="books">
+        <h2 class="lwimp-h" style="margin-top:6px">World Info → world lorebook</h2>
+        <p>Copy a Loreweaver <b>World Info</b> book into the selected world's lorebook. Keywords
+        (secondary keys merged in) → triggers, constant entries → always-on, comment → title.
+        ST macros like <code>{{user}}</code>/<code>{{char}}</code> stay literal — edit them in the
+        World Editor if needed.</p>
+        <div id="lwimpBooks">Loading World Info…</div>
+      </div>
       <div id="lwimpMsg" role="status"></div>
     </div>`;
 
   const $ = (id) => pane.querySelector("#" + id);
   const say = (t, cls) => { const m = $("lwimpMsg"); m.textContent = t; m.className = cls || ""; };
+
+  // ---- tab strip: three import flows, one visible at a time (chrome only — logic below is
+  // untouched; everything renders regardless of the active tab). The last tab is remembered.
+  const TABS = ["personas", "cards", "books"];
+  let curTab = "personas";
+  try { curTab = localStorage.getItem("rpge.importTab") || "personas"; } catch (e) {}
+  if (!TABS.includes(curTab)) curTab = "personas";
+  function showTab(t) {
+    curTab = t;
+    try { localStorage.setItem("rpge.importTab", t); } catch (e) {}
+    pane.querySelectorAll(".lwimp-tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+    pane.querySelectorAll(".lwimp-pane").forEach((p) => { p.hidden = p.dataset.pane !== t; });
+    // The target-world selector is shared by the cards and books tabs; personas don't need it.
+    const wb = $("lwimpWorldBox");
+    if (wb) wb.hidden = t === "personas";
+  }
+  pane.querySelectorAll(".lwimp-tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  showTab(curTab);
 
   // Small non-crypto content hash (fnv1a hex) — enough to notice a source change.
   function fnv1a(str) {

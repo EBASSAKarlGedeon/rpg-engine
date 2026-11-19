@@ -134,6 +134,11 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.route("**/*", (r) => (/^http:\/\/127\.0\.0\.1/.test(r.request().url()) ? r.continue() : r.abort()));
   const url = `http://127.0.0.1:${PORT}/app/index.html#imports`; // [rpge-patch 018] import page lives in the app now
   const heroes = () => page.evaluate(async () => (await window.root.kv.rpg.get("savedHeroes")) || []);
+  // [rpge-patch 018] the import page now has a tab strip; jump to a flow before interacting with it
+  const tab = async (t) => {
+    const btn = await page.waitForSelector(`.lwimp-tab[data-tab="${t}"]`, { timeout: 30000 });
+    await btn.evaluate((b) => b.click());
+  };
 
   await page.goto(url);
   await page.waitForSelector(".prow", { timeout: 8000 });
@@ -219,6 +224,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   await page.waitForTimeout(5000);
   await seedWorld();
   await page.reload();
+  await tab("cards"); // persisted in rpge.importTab, so this also holds after the reload above
   try {
     await page.waitForSelector("#lwimpChars .prow", { timeout: 25000 });
   } catch (e) {
@@ -342,6 +348,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!kw || !kw.meta || kw.meta.name !== "Kael") problems.push("card-world (no book): world missing: " + JSON.stringify(kw && kw.meta));
 
   // ---- World Info -> lorebook ----
+  await tab("books");
   await page.waitForSelector("#lwimpBooks .prow", { timeout: 8000 });
   await page.click("#lwimpBooks .prow button");
   await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Imported 2"), { timeout: 8000 });
