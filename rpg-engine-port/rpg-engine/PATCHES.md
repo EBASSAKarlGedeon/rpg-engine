@@ -433,3 +433,59 @@ DICE / SCENE DICE switches, all default ON; `#ceScene` toggles cleanly true→fa
 (f068-scenedice.png). Test-infra note: a world seeded with empty `meta.authorId` gets ADOPTED by
 the local identity at boot (⋮ menu shows ✏️ Edit); the card's LAST button is ✖ Delete — don't
 blind-click `.ld-wcard button:last-child`.
+
+---
+
+## Heavy-testing sweep (2026-11-20, fixes `5a916fa`–`0ba4cfd`)
+
+Full frontend + backend sweep against the packaged Loreweaver server (real AI through the bridge
+on the cheap DeepSeek flash profile; kv-stub Playwright harnesses in `tools/heavy-*.js` + shared
+seeds in `tools/test-seeds.js`). Verified live: 32/32 kv-router edge cases (traversal, tombs,
+bursts, unicode, 4 MB payloads); 8+ real GM turns end-to-end (streaming, NPC catalogue, tracker
+bars, lorebook); scene dice ON cadence; npc-life ticks; memory roll-up (notes + threads + latest
+situation); re-roll + version nav; message edit/delete; skill checks; idle turns; unicode input;
+world editor save round-trip; imports (persona→hero, card→NPC, card→world with embedded-book
+keywords); stop mid-generation; session shelf; OP free edit (stat 8→9 persisted); duet
+side-by-side rendering in real play.
+
+**Bugs found and fixed:**
+- **[Loreweaver `src/sync/scan.js`] same-key concurrent kv writes could 500.** The temp filename
+  was shared between same-millisecond writers (first rename moved it away; second rename ENOENT),
+  and Windows rename-over-existing transiently EPERMs under concurrent writers. Fix: unique
+  per-call temp suffix + in-process per-path write mutex + bounded EPERM/EBUSY/ENOENT retry.
+  200-way concurrency now 0 failures; 130/130 sync tests pass.
+- **`portraitHtml` rendered an EMPTY portrait as the raw placeholder path in 71px text** in the
+  hero panel and every portrait box. Fix: empty portrait renders the stock placeholder as a real
+  `<img>` (`5a916fa`).
+- **[rpge-patch 014 fix] Scene dice rode the roll-up gate** (fired only on roll-up turns, so the
+  "every 15 turns" cadence never ran — verified never-fired in a 19-turn real session). Fix: the
+  fire block moved to the main save path next to the npc-life tick; cursor persists even on a
+  calm roll (`741218b`). Verified: fired exactly at turn 15, nudge scheduled, consumed at 16.
+- **Bridged calls gated on a page-stored API key** (`ai-provider.js`): with the bridge ON the
+  server holds the key, but the engine refused NPC profiles / checks / staging / history /
+  roll-up calls with "No API key saved for OpenAI" before fetch. Fix: when
+  `window.LoreweaverBridge.isEnabled()`, the key gate is skipped (`ea55471`). (The GM narration
+  path happened to pass because it used a different provider slot with a key present.)
+- **Perchance-only landing widgets 404'd under Loreweaver serving** (last-edit / views /
+  update-check fetched `/api/getGeneratorStats?name=undefined`). Fix: skip when
+  `window.generatorName` is not set (`891f85f`).
+- **Import page's world dropdown never refreshed after the saves shim's sync landed** — a fresh
+  browser showed "No game worlds yet" until reload. Fix: the shim now dispatches
+  `rpge-saves-synced` after boot reconcile; the page re-reads the dropdown then (`31e4c76`).
+- **[rpge-patch 016] A failed GM turn died as a silent unhandled rejection** — the player's
+  action sat unanswered with no feedback (the engine's own `lastError` toast covers the AI-call
+  failure path; anything throwing outside it escaped silently). Fix: runGmTurn catches,
+  toasts one human sentence ("⚠ The narrator didn't answer this turn … send an empty message to
+  retry it"), and re-throws so recovery paths (empty-send retry, re-roll, edit, delete) are
+  untouched (`0ba4cfd`). Verified live with a deliberately misconfigured bridge profile.
+
+**User-config finding (reported, not code):** the "Cheaper" connection profile had the NanoGPT
+secret bound (sk-nan…) instead of an OpenRouter key, so every call 400'd. Rebinding via the
+settings API was reverted by the live UI's in-memory settings copy — the user should rebind it in
+the Connection Manager UI.
+
+**Harness notes:** Playwright `waitForFunction(fn, {timeout})` passes options as ARG — must be
+`waitForFunction(fn, undefined, {timeout})` (silent 30 s default otherwise). Hover-revealed turn
+controls need a hover or a synthetic JS click. Toast text lives in `#toastEl` (id, not class).
+`normalizeWorld` silently drops a malformed `trackers: {defs:[]}` object (file form is a plain
+array) with no warning — improvement candidate, not fixed.
