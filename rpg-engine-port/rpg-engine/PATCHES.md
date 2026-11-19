@@ -331,3 +331,29 @@ same beat render as ONE side-by-side block: circular portrait over each speaker'
   collapse to one shared line under both portraits.
 - `styles.css`: `.msg.duet` block styles; halves stack vertically under 640px.
 Presentational only — no save-schema or state changes. Logic-tested (6 parser cases), suites green.
+
+---
+
+## [rpge-patch 012] NPC life tick: self-classified importance (2026-11-20, `d1c1631`)
+
+**Problem.** Patch 009's importance system classifies memories the *roll-up* writes
+(importance 3 = verbatim commitment, pinned, always fed). NPC-life events bypassed it:
+the tick's reply had no importance field, so an off-screen promise/deal recorded by a
+background tick entered the pool as an ordinary importance-2 note — recalled by trigger
+match, first dropped under context pressure, losing the exact terms of the deal.
+
+**Fix (`app/src/scripts/npc-life.js` only).**
+- The tick's reply shape gains `"importance": <1|2|3>`, with a rules bullet mirroring the
+  roll-up's wording (2 = normal event, default; 3 = commitment whose exact wording matters,
+  recorded as close to VERBATIM as possible, RARE — only when terms were actually agreed;
+  1 = minor color). The event-writing bullet adds: importance 3 must state the commitment's
+  exact terms verbatim.
+- The repair pass's reply shape gains the field too, and the merge preserves the original
+  tick's importance when the repair supplies none.
+- Push site: `importance` validated to 1–3 (default 2), `pinned: importance === 3`, and the
+  rating stored on the memory — the same fields the roll-up writes, so the engine's feed
+  (rp-engine.js always-3 tier: `pinned && importance === 3` → VERBATIM COMMITMENT, always
+  fed), pruning and load normalizer treat tick memories identically with zero engine changes.
+
+**Verification.** `node --check` clean; check-imports / check-bridge / check-storage green;
+pushed `e7f5cb4..d1c1631` and pulled into the deployed AppData clone.
