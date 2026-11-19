@@ -397,3 +397,39 @@ Playwright (kv-stub recipe): seeded 22-turn session — Threads panel shows "pla
 ago" / "planted 3 turns ago" / legacy stamped "planted 0 turns ago", and the seeded directive
 shows the 🎯 badge (f060-threads.png). Test-infra note: session `turn` is message-derived
 (seed enough action messages or the turn counter resets to the message count).
+
+---
+
+## [rpge-patch 014] Scene-direction dice — the co-director's d20 (2026-11-20, `5230b06`)
+
+**Problem.** Feature E of the preset-port plan: the story could go arbitrarily long without the
+scene ever being pushed off its smoothest path. User decisions (2026-11-20): keep it SEPARATE
+from the open-thread dice (thread dice fire tracked debt; scene dice inject unscheduled
+direction), automatic only, every **15 turns** ("the moment a scene can become stale").
+
+**Changes.**
+- New `app/src/scripts/scene-dice.js`: `SCENE_DICE_EVERY_TURNS = 15`; d20 → nudge table —
+  1–2 Complication (a plan/errand/routine fails concretely), 3–4 Twist (reframing information
+  arrives), 5–6 Arrival (a known face shows up unexpectedly), 7–8 Pressure (stakes/urgency rise),
+  9–10 Quiet beat (a breather), 11–20 calm (null — the dice mostly don't interfere; ~50% hit per
+  15-turn check ≈ one nudge per ~30 turns). Directives are about DIRECTION, never outcomes
+  (skill checks own success/failure).
+- `main.js`: fire block in saveAndMaybeMemory (independent of the roll-up cadence): every 15 turns
+  roll d20; a hit sets `state.sceneDirective = {kind, text, targetTurn: turn+1}` + 🎲 toast; stale
+  directives cleared when their window passes; gated by `world.sceneDice !== false` (default ON).
+- `rp-engine.js` buildContext: injects `DIRECTION — SCENE DICE (<kind>): <text>. Weave it into this
+  reply.` on its targetTurn only (same re-roll-safe contract as the patch-013 thread directive;
+  both can fire the same turn).
+- `world.js` (3 spots) + `world-editor.js` (both renderers): `sceneDice` world field + "Scene
+  dice" switch in the World Editor Story tab beside prose rules and thread dice.
+- Normalize: `sceneDirective` validated like the thread directive; `lastSceneDiceTurn` cursor
+  sanitized.
+
+**Verification.** 19/19 logic tests on the REAL modules (nudge table edges incl. calm range +
+invalid rolls; thread + scene directives coexist and neither leaks past its target turn; scene
+directive alone; re-roll re-injection; normalize). check-imports/bridge/storage green. Playwright
+(kv-stub recipe, seed-reload workaround): World Editor → Story tab shows PROSE RULES / THREAD
+DICE / SCENE DICE switches, all default ON; `#ceScene` toggles cleanly true→false→true
+(f068-scenedice.png). Test-infra note: a world seeded with empty `meta.authorId` gets ADOPTED by
+the local identity at boot (⋮ menu shows ✏️ Edit); the card's LAST button is ✖ Delete — don't
+blind-click `.ld-wcard button:last-child`.
