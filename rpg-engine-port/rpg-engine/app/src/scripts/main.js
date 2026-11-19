@@ -13055,22 +13055,9 @@ async function saveAndMaybeMemory() {
         }
       }
     }
-    // [rpge-patch 014] Scene-direction dice (feature E) — the co-director's d20, INDEPENDENT of
-    // the thread dice: every SCENE_DICE_EVERY_TURNS turns (the moment a scene can go stale),
-    // client-side d20; a hit schedules a one-line direction nudge for the NEXT turn's GM context
-    // (scene-dice.js table: complication / twist / arrival / pressure / quiet beat; ~half the
-    // rolls are calm). Same targetTurn contract as the thread directive. Per-world toggle
-    // (world.sceneDice, default ON; OFF = no nudges ever scheduled).
-    if (state.sceneDirective && (state.sceneDirective.targetTurn || 0) <= state.turn) state.sceneDirective = null;
-    if (currentWorldSceneDice && ((state.turn || 0) - (state.lastSceneDiceTurn || 0)) >= SCENE_DICE_EVERY_TURNS) {
-      state.lastSceneDiceTurn = state.turn || 0;
-      const roll = 1 + Math.floor(Math.random() * 20);
-      const nudge = sceneNudgeFor(roll);
-      if (nudge) {
-        state.sceneDirective = { kind: nudge.kind, text: nudge.text, targetTurn: (state.turn || 0) + 1 };
-        try { notify("🎲 Scene dice (d20 " + roll + "): " + sceneDiceToast(roll) + " next turn"); } catch (_) {}
-      }
-    }
+    // [rpge-patch 013] Thread dice: the stale-directive clear stays INSIDE the roll-up gate
+    // (the detonator runs once per roll-up — threads are only fresh here).
+    if (state.threadDirective && (state.threadDirective.targetTurn || 0) <= state.turn) state.threadDirective = null;
   }
   // Off-screen NPC private life: one background call every NPC_LIFE_EVERY_TURNS
   // turns advances a few NPCs the hero hasn't seen in a while. It writes only
@@ -13102,6 +13089,33 @@ async function saveAndMaybeMemory() {
       }
     }
   } catch (e) { console.error("[npc-life] background tick failed:", e); }
+  // [rpge-patch 014] Scene-direction dice — the co-director's d20, on its OWN cadence (every
+  // SCENE_DICE_EVERY_TURNS turns, independent of roll-ups). Client-side roll; a hit schedules a
+  // one-line direction nudge for the NEXT turn's GM context (scene-dice.js table: complication /
+  // twist / arrival / pressure / quiet beat; ~half the rolls are calm). Same targetTurn contract
+  // as the thread directive (re-injects on re-rolls, never leaks). Per-world toggle
+  // (world.sceneDice, default ON; OFF = no nudges ever scheduled).
+  if (state.sceneDirective && (state.sceneDirective.targetTurn || 0) <= state.turn) state.sceneDirective = null;
+  if (currentWorldSceneDice && ((state.turn || 0) - (state.lastSceneDiceTurn || 0)) >= SCENE_DICE_EVERY_TURNS) {
+    state.lastSceneDiceTurn = state.turn || 0;
+    const roll = 1 + Math.floor(Math.random() * 20);
+    const nudge = sceneNudgeFor(roll);
+    // Persist the cursor even on a calm roll so the cadence stays every-15 exactly.
+    try { await store.save(state); }
+    catch (e) {
+      if (!(isStorageError(e) || (e && e.isStorageUnavailable))) throw e;
+      // cursor persistence is a nicety on a full disk — the next turn retries
+    }
+    if (nudge) {
+      state.sceneDirective = { kind: nudge.kind, text: nudge.text, targetTurn: (state.turn || 0) + 1 };
+      try { await store.save(state); }
+      catch (e) {
+        if (!(isStorageError(e) || (e && e.isStorageUnavailable))) throw e;
+      }
+      try { notify("🎲 Scene dice (d20 " + roll + "): " + sceneDiceToast(roll) + " next turn"); } catch (_) {}
+      refreshRailIfOpen("left");
+    }
+  }
 }
 
 // The small bridge the lazily-imported community/backup modules use to talk back to the app:
