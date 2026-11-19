@@ -1,6 +1,9 @@
 // MNO RPG ENGINE — main app. Boots the UI, drives the chat loop, sessions, memory, and panels.
 import { SessionStore, HeroStore, exportState, parseImported, SAVE_EXTENSION } from "./storage.js";
 import { MemorySystem, MEMORY_EVERY_TURNS, MANUAL_ENABLED_CAP, manualEnabledCount, normalizeMemories, ownerLabel } from "./memory-system.js";
+// [rpge-patch 009] layered narrative history: cadence tick, rewind invalidation, panel stats +
+// backlog build. See memory-history.js + PATCHES.md.
+import { historyDue, runHistorySnippet, invalidateFromTurn, migrateDigest, normalizeHistory, historyStats, renderHistory, backlogEligible, historyConfig, setHistoryBudget, effectiveBudget, pendingTurns, HISTORY_SNIPPET_TURNS } from "./memory-history.js";
 import { NpcLifeSystem, NPC_LIFE_EVERY_TURNS, NPC_LIFE_MAX_PER_TICK, NPC_LIFE_MIN_OFFSCREEN_TURNS, NPC_LIFE_HISTORY_MAX, NPC_LIFE_GOAL_MAX_CHARS, NPC_LIFE_WHERE_MAX_CHARS } from "./npc-life.js";
 import { NpcSystem, mergePersona, npcLinkRuleFor } from "./npc-system.js";
 import { RPEngine } from "./rp-engine.js";
@@ -3667,6 +3670,32 @@ async function enterSession(sess) {
   });
   if (!state.messages.length) await startNewSession();
   refreshCtxMeter();
+  // [rpge-patch 009] Backlog offer: an old session with no narrative history yet gets a one-time
+  // (per session) prompt to build it from the transcript — cancelable, incremental (the History
+  // panel's Build button continues in batches of 10 snippets).
+  (async () => {
+    try {
+      if (!backlogEligible(state)) return;
+      const key = "rpge.historyOffer:" + (state.id || "");
+      if (localStorage.getItem(key)) return;
+      localStorage.setItem(key, "1");
+      const ok = await ConfirmPopup.open({
+        title: "Build narrative history?",
+        message: "This session has " + (state.turn || 0) + " turns but no layered history yet — the GM only sees the recent window + memories, which is how details get lost in long games. Build a layered summary of the transcript now? (Runs on your cheap model role; you can continue later from Memories > History.)",
+        confirmText: "Build history"
+      });
+      if (!ok) return;
+      let built = 0;
+      while (built < 60) { // hard cap per run; the panel button continues
+        const rep = await runHistorySnippet(state, genText);
+        if (!rep.snippet) break;
+        built++;
+        if (built % 5 === 0) await store.save(state);
+      }
+      await store.save(state);
+      notify("[History] " + built + " snippets built" + (pendingTurns(state) > 0 ? " — continue via Memories > History" : " — fully covered"));
+    } catch (e) { console.warn("[history] backlog offer failed:", e); }
+  })();
   // Semantic retrieval warmup (never blocks entering): embed this session's
   // working set in the background so later turns rank hybrid BM25+cosine;
   // early turns simply run BM25 until vectors land. The weekly vector sweep
@@ -7227,6 +7256,7 @@ function saveActionText(turn, txt) {
   const rw = rewindMemoryForRegion(turn.start);
   turn.action.text = txt;
   memory.rewindFromTurn(state, rw.k, rw.baked);
+  try { invalidateFromTurn(state, rw.k); } catch (e) {} // [rpge-patch 009] history snippets covering the rewritten span drop; the tick re-covers them
   editing = null;
   render();
   store.save(state).catch((e) => { if (typeof isStorageError === "function" && (isStorageError(e) || (e && e.isStorageUnavailable))) { try { notifyStorageError(notify, "saving", e); } catch (_) {} } else console.warn("[session] background save failed:", e); });
@@ -7282,6 +7312,7 @@ function saveGmFull(turn, full) {
     if (list && list.length) list[state.openingRerollIndex || 0] = newParts;
   }
   memory.rewindFromTurn(state, rw.k, rw.baked);
+  try { invalidateFromTurn(state, rw.k); } catch (e) {} // [rpge-patch 009] history snippets covering the rewritten span drop; the tick re-covers them
   editing = null;
   // The edited turn's anchored ordinal (NOT state.turn): newcomers/promotes edited into an old
   // turn must be stamped with that turn, and sightings must reflect visible ordinals throughout.
@@ -8187,6 +8218,7 @@ function deleteTurn(turn) {
   // The whole turn is gone — auto memories baked from it onward describe events that no longer
   // happened; drop them so the next roll-up re-bakes from the surviving transcript.
   memory.rewindFromTurn(state, rw.k, rw.baked);
+  try { invalidateFromTurn(state, rw.k); } catch (e) {} // [rpge-patch 009] history snippets covering the rewritten span drop; the tick re-covers them
   editing = null;
   // Deleting rewrites history: recompute sightings from what is shown so removed speakers stop
   // counting as recently seen (their dossiers must not be fed).
@@ -8216,6 +8248,7 @@ function deleteGmReply(turn) {
     // This turn's world-reply content is gone — re-bake its memories (and anything later) from
     // the surviving transcript on the next roll-up.
     memory.rewindFromTurn(state, rw.k, rw.baked);
+  try { invalidateFromTurn(state, rw.k); } catch (e) {} // [rpge-patch 009] history snippets covering the rewritten span drop; the tick re-covers them
     editing = null;
     // Deleting rewrites history: recompute sightings from what is shown so removed speakers stop
     // counting as recently seen.
@@ -8247,6 +8280,7 @@ async function rerollTurn(turn, btn) {
     // The old reply is replaced by a fresh one — its baked memories (and anything later) are
     // suspect until the new text is in; re-bake happens on the next roll-up cadence.
     memory.rewindFromTurn(state, rw.k, rw.baked);
+  try { invalidateFromTurn(state, rw.k); } catch (e) {} // [rpge-patch 009] history snippets covering the rewritten span drop; the tick re-covers them
     insertIndex = turn.start + 1;
   } else {
     normalizeOpeningRerolls();
@@ -8260,6 +8294,7 @@ async function rerollTurn(turn, btn) {
     const rw = rewindMemoryForRegion(turn.start);
     state.messages.splice(turn.start, turn.end - turn.start + 1);
     memory.rewindFromTurn(state, rw.k, rw.baked);
+  try { invalidateFromTurn(state, rw.k); } catch (e) {} // [rpge-patch 009] history snippets covering the rewritten span drop; the tick re-covers them
     insertIndex = turn.start;
   }
   render();
@@ -8324,6 +8359,7 @@ function navReroll(turn, dir, btn) {
   // Switching to another archived version rewrites this turn's content — drop its baked
   // memories (and anything later) so the next roll-up re-bakes from the version now shown.
   memory.rewindFromTurn(state, rw.k, rw.baked);
+  try { invalidateFromTurn(state, rw.k); } catch (e) {} // [rpge-patch 009] history snippets covering the rewritten span drop; the tick re-covers them
   // Switching versions rewrites this turn: recompute sightings from the version now shown so
   // NPCs unique to the hidden version stop counting as recently seen (and their dossiers stop
   // being fed). Uses anchored ordinals, never state.turn, so switching an old turn never stamps
@@ -9225,7 +9261,8 @@ function renderMemoryPanel(body) {
     ["manual", "Manual"],
     ["auto", "Auto"],
     ["situation", "Latest"],
-    ["threads", "Threads"]
+    ["threads", "Threads"],
+    ["history", "History"]
   ];
   const bar = document.createElement("div");
   bar.className = "seg mem-tabs";
@@ -9237,7 +9274,114 @@ function renderMemoryPanel(body) {
   if (memTab === "situation") renderSituationPanel(body);
   else if (memTab === "threads") renderThreadsPanel(body);
   else if (memTab === "manual") renderManualMemories(body);
+  else if (memTab === "history") renderHistoryPanel(body); // [rpge-patch 009]
   else renderAutoMemories(body);
+}
+
+// [rpge-patch 009] History sub-tab: layer stats, the snippet list (edit/delete), the always-fed
+// preview, the token budget setting, and the backlog build for old sessions.
+function renderHistoryPanel(body) {
+  const stats = historyStats(state);
+  const pending = pendingTurns(state);
+  const cfg = historyConfig();
+  const eff = effectiveBudget();
+  const wrap = document.createElement("div");
+  const activeLayers = stats.layers.filter(n => n > 0);
+  const layersTxt = stats.layers.map((n, i) => ("L" + i + ":" + n)).filter((t, i) => stats.layers[i] > 0).join(" · ");
+  wrap.innerHTML = `
+    <div class="mem-history-stats">
+      <div>${stats.snippets ? `<b>${stats.snippets}</b> snippet${stats.snippets === 1 ? "" : "s"} across ${activeLayers.length} layer${activeLayers.length === 1 ? "" : "s"} (${layersTxt})` : ("No history yet — it builds during play (every " + HISTORY_SNIPPET_TURNS + " turns, from turn 10), or build the backlog below.")}</div>
+      ${stats.snippets ? `<div>Coverage: turns 1–${stats.coveredTo} · ~${stats.tokens} tokens (budget ~${eff})${pending ? ` · <b>${pending}</b> turns pending` : ""}</div>` : ""}
+    </div>
+    <div class="mem-history-actions">
+      <button class="btn ok" id="histBuild">${pending ? ("Build history (" + pending + " turns pending)") : "Build history"}</button>
+      <button class="btn" id="histPreview">Preview what the GM sees</button>
+    </div>
+    <div class="mem-history-budget">
+      <label for="histBudget">History budget (tokens, per device)</label>
+      <input type="number" id="histBudget" min="2000" max="50000" step="1000" value="${cfg.budgetTokens}">
+      <button class="mini" id="histBudgetSave">Save</button>
+    </div>
+    <div id="histStatus" class="dim"></div>
+    <div id="histList"></div>`;
+  body.appendChild(wrap);
+  wrap.querySelector("#histBudgetSave").onclick = () => {
+    const n = setHistoryBudget(wrap.querySelector("#histBudget").value);
+    notify("[History] budget: " + n + " tokens");
+    renderHistoryPanel(body);
+  };
+  wrap.querySelector("#histPreview").onclick = async () => {
+    const txt = renderHistory(state) || "(nothing summarized yet)";
+    await TextPopup.open({ title: "NARRATIVE HISTORY — exactly what the GM receives", value: txt, rows: 14 });
+  };
+  wrap.querySelector("#histBuild").onclick = async () => {
+    const btn = wrap.querySelector("#histBuild");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    const st = wrap.querySelector("#histStatus");
+    try {
+      let built = 0;
+      for (let i = 0; i < 10; i++) { // batches of 10 snippets per click - progress stays reviewable
+        const rep = await runHistorySnippet(state, genText);
+        if (!rep.snippet) break;
+        built++;
+        st.textContent = "Building... " + built + " snippets this pass - coverage through turn " + ((state.memories.history || {}).summarizedUpTo || 0);
+      }
+      if (built) {
+        await store.save(state);
+        notify("[History] " + built + " snippets built" + (pendingTurns(state) > 0 ? " - Build again for more" : " - fully covered"));
+      } else {
+        st.textContent = "Nothing to build - the cadence (every " + HISTORY_SNIPPET_TURNS + " turns) handles it during play.";
+      }
+    } catch (e) {
+      console.error("[history] backlog build failed:", e);
+      st.textContent = "! " + (e && e.message ? e.message : "The AI call failed.");
+    } finally {
+      btn.disabled = false;
+      renderHistoryPanel(body);
+    }
+  };
+  // Snippet list, newest layer first, capped to keep the panel snappy.
+  const h = (state.memories || {}).history;
+  const list = wrap.querySelector("#histList");
+  if (h && Array.isArray(h.layers)) {
+    const rows = [];
+    for (let l = h.layers.length - 1; l >= 0; l--) {
+      const arr = h.layers[l] || [];
+      if (!arr.length) continue;
+      rows.push('<div class="mem-hist-layer">Layer ' + l + " - " + arr.length + " snippet" + (arr.length === 1 ? "" : "s") + "</div>");
+      for (let i = arr.length - 1; i >= 0 && rows.length < 210; i--) {
+        const s = arr[i];
+        rows.push('<div class="mem-hist-row" data-l="' + l + '" data-i="' + i + '">'
+          + '<span class="mem-hist-span">' + (s.from === s.to ? ("turn " + s.from) : ("turns " + s.from + "–" + s.to)) + "</span>"
+          + '<span class="mem-hist-text">' + esc(String(s.text || "")) + "</span>"
+          + '<span class="mem-hist-acts"><button class="mini mem-hist-edit" type="button" title="Edit snippet">✎</button>'
+          + '<button class="mini mem-hist-del" type="button" title="Delete snippet">✕</button></span>'
+          + "</div>");
+      }
+    }
+    list.innerHTML = rows.join("");
+    list.querySelectorAll(".mem-hist-row").forEach((row) => {
+      const l = Number(row.dataset.l), i = Number(row.dataset.i);
+      row.querySelector(".mem-hist-edit").onclick = async () => {
+        const nv = await TextPopup.open({ title: "Edit history snippet", value: h.layers[l][i].text, rows: 6 });
+        if (nv === null) return;
+        if (nv.trim()) h.layers[l][i].text = nv.trim();
+        await store.save(state).catch(() => {});
+        renderHistoryPanel(body);
+      };
+      row.querySelector(".mem-hist-del").onclick = async () => {
+        const ok = await ConfirmPopup.open({ title: "Delete snippet", message: "Delete this history snippet? Its turns lose their summary record (they stay readable in the transcript).", confirmText: "Delete", danger: true });
+        if (!ok) return;
+        h.layers[l].splice(i, 1);
+        let covered = 0;
+        for (const arr of h.layers) for (const s of arr) covered = Math.max(covered, s.to || 0);
+        h.summarizedUpTo = covered;
+        await store.save(state).catch(() => {});
+        renderHistoryPanel(body);
+      };
+    });
+  }
 }
 
 /* ---------- memory panel: lazily-built rows ---------- */
@@ -9726,6 +9870,10 @@ function normalize(d, opts) {
     if (m.role === "image") { m.pending = 0; m.failed = 0; m.cancelled = 0; delete m.replacing; }
   }
   d.memories = normalizeMemories(d.memories, (d.character && d.character.name) || "");
+  // [rpge-patch 009] layered narrative history: normalize the stored stack, and migrate the
+  // retired DISTANT PAST digest into it as a deep-layer seed (once; only when nothing is
+  // summarized yet, so an established history is never disturbed).
+  try { normalizeHistory(d.memories.history); migrateDigest(d); } catch (e) { console.warn("[history] init failed:", e); }
   // 🔗-menu link overrides (see npcLinkRuleFor in npc-system.js). Sanitized, never trusted blind:
   // only well-formed rules survive a load, so a stale hand-edit can't redirect lookups anywhere odd.
   if (!d.npcLinkRules || typeof d.npcLinkRules !== "object" || Array.isArray(d.npcLinkRules)) d.npcLinkRules = {};
@@ -12722,6 +12870,20 @@ async function saveAndMaybeMemory() {
       return; // the turn is in memory and playable — skip the memory roll-up, which needs saves
     }
     throw e;
+  }
+  // [rpge-patch 009] narrative history tick — BEFORE the roll-up so a fresh snippet's turns are
+  // summarized before the memory bake reads them. Cadence-gated inside historyDue (turn >= 10,
+  // >= 5 lagged unsummarized turns); one small delta call per trigger, promotions follow.
+  if (historyDue(state)) {
+    try {
+      const hrep = await runHistorySnippet(state, genText);
+      if (hrep.snippet) {
+        await store.save(state);
+        console.info("[history] snippet through turn", state.memories.history && state.memories.history.summarizedUpTo, "- promotions:", hrep.promotions);
+      }
+    } catch (e) {
+      console.warn("[history] snippet failed (non-fatal):", e && e.message);
+    }
   }
   if ((state.turn - (state.lastAutoMemoryTurn || 0)) >= MEMORY_EVERY_TURNS) {
     const added = await memory.rollUp(state);

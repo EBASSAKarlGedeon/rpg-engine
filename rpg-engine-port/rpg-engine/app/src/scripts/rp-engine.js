@@ -6,6 +6,7 @@ import { buildStatsContext } from "./stats.js";
 import { formatDistance, compassDir, normalizeLoc, mapScale } from "./map-system.js";
 import { loreForTurn, LORE_FEED_CAP, LORE_FEED_MAX_CHARS, DEFAULT_TRIGGER_WINDOW_TURNS, STOPWORDS, nameHit } from "./lorebook.js";
 import { memoriesForTurn, MEMORY_FEED_CAP, MEMORY_TOPICAL_ACTIVE_CAP, MEMORY_TOPICAL_OPEN_CAP, MEMORY_NAME_FEED_CAP, MEMORY_TRIGGER_WINDOW_TURNS, ownerLabel } from "./memory-system.js";
+import { renderHistory } from "./memory-history.js"; // [rpge-patch 009]
 import { rank as bm25Rank, tokenize as bm25Tokenize } from "./bm25.js";
 import { embedQuery, getCachedVec, cosine, fuseRrf, EMB_COS_MIN } from "./embeddings.js";
 import { subUser, heroNameOf, blankDetail, compactNpcLine, ellipsize } from "./text-utils.js";
@@ -917,14 +918,37 @@ export class RPEngine {
       );
     }
 
-    // The DISTANT PAST digest — a bounded rolling record of the era that fell off the live memory
-    // list as it filled up (public/world knowledge only; named-owner facts are private and are
-    // never absorbed into it). It is background canon everyone shares, fed every turn for
-    // continuity: history, not current events — the GM should reference it but never re-record
-    // its facts as if new, and it carries no owner/turn nuance beyond what each line states.
-    const digestTxt = String(((state.memories || {}).digest) || "").trim();
-    if (digestTxt) {
-      parts.push("DISTANT PAST (compressed public canon from long ago — events that fell off the live memory list as it filled up. Background world knowledge everyone shares — reference it for continuity and never contradict it, but it is HISTORY, not current events, and its facts are already recorded, so do not re-record them as new memories):\n" + digestTxt);
+    // [rpge-patch 009] Verbatim commitments: importance-3 memories are ALWAYS fed (like the
+    // player's own notes) — a promise/deal/oath must never fall out of the feed because its
+    // trigger words didn't happen to fire this turn. Most recent first, bounded (the layered
+    // history also carries their narrative context, so this stays a tight guarantee list).
+    const always3 = (state.memories.auto || [])
+      .filter((m) => m && m.pinned && m.importance === 3 && !memSel.some((s) => s.m === m))
+      .sort((a, b) => (b.turn || 0) - (a.turn || 0))
+      .slice(0, 15);
+    if (always3.length) {
+      const heroName = (state.character && state.character.name) || "";
+      let chars = 0;
+      const lines = [];
+      for (const m of always3) {
+        const line = `- [${ownerLabel(m.owner, heroName)}${typeof m.turn === "number" && m.turn >= 0 ? " · " + agoLabel(state.turn, m.turn) : ""} · VERBATIM COMMITMENT — keep its exact terms, never quietly drop or fulfill it without the story saying so] ${m.text}`;
+        if (lines.length && chars + line.length > 3000) break;
+        lines.push(line); chars += line.length;
+      }
+      if (lines.length) {
+        parts.push("STANDING COMMITMENTS (word-for-word; the story MUST honor these — they are binding until the story explicitly resolves them):\n" + lines.join("\n"));
+      }
+    }
+
+    // [rpge-patch 009] NARRATIVE HISTORY — the layered summary spine, ALWAYS fed: a recursive
+    // delta-summary of EVERYTHING before the recent window (see memory-history.js). Replaces the
+    // retired DISTANT PAST digest. Rendered oldest→newest within the configured budget; the GM
+    // treats it as ground truth so met characters, promises and old actions can't be re-invented.
+    const historyTxt = renderHistory(state);
+    if (historyTxt) {
+      parts.push(
+        "NARRATIVE HISTORY (layered summary of the whole story before the recent window — EVERY line is ground truth: characters already met, promises and deals made, reveals, items, grudges, outcomes. Treat the hero and cast as having LIVED all of this; never re-introduce a met character as new, never act like an old event didn't happen, never contradict it. It is HISTORY, not current events — do not re-record its facts as new memories):\n" + historyTxt
+      );
     }
 
     // NPC PROFILES — one section, three tiers. Full dossiers (incl. secrets + tracked

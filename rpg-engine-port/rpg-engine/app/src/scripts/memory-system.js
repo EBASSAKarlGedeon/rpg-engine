@@ -134,6 +134,7 @@ const HERO_ALIASES = new Set(["hero", "the hero", "player", "the player", "prota
 const PUBLIC_OWNERS = new Set(["world", "all", "everyone", "public", "party"]);
 
 const str = (v) => (v === undefined || v === null ? "" : String(v));
+export { str };
 
 // Fallback trigger extraction from free text (manual notes, migrated legacy entries). Picks the
 // first distinctive lowercase words; if nothing survives, the whole phrase becomes one trigger.
@@ -231,6 +232,10 @@ export function migrateMemoryEntry(raw, heroName = "", manual = false) {
     text,
     manual: !!manual,
     pinned: manual ? true : !!raw.pinned,
+    // [rpge-patch 009] importance: 1 = minor color (trigger-match recall, first dropped),
+    // 2 = normal event (default), 3 = verbatim commitment (promise/deal/oath whose EXACT wording
+    // matters) — the roll-up pins importance-3 entries, and the feed always includes them.
+    importance: [1, 2, 3].includes(Math.round(Number(raw.importance)) || 0) ? Math.round(Number(raw.importance)) : 2,
     ts: typeof raw.ts === "number" && raw.ts > 0 ? raw.ts : Date.now(),
     owner,
     triggers,
@@ -686,7 +691,7 @@ export function memoriesForTurn(entries, { chatText = "", actionText = "", locat
 
 // Index of the first message of the last `lagTurns` player turns. Messages at/after this index
 // are considered "too fresh" (still editable/rerollable) and excluded from a roll-up.
-function lagStartIndex(messages, lagTurns) {
+export function lagStartIndex(messages, lagTurns) {
   let count = 0;
   let i = messages.length;
   while (i > 0 && count < lagTurns) {
@@ -700,7 +705,7 @@ function lagStartIndex(messages, lagTurns) {
 // Approximate absolute session-turn label per message: counts anchored player turns (actions +
 // directs; GM-only continuations fold into the turn they extend). Consistent with the "last N
 // turns" notion the GM already sees in RECENT EVENTS.
-function messageTurns(messages) {
+export function messageTurns(messages) {
   const turns = new Array(messages.length).fill(0);
   let t = 0;
   for (let i = 0; i < messages.length; i++) {
@@ -801,7 +806,7 @@ function buildRefText(existingList, heroName, chunkText = "") {
 
 // Render one chunk's transcript lines exactly as the summarizer sees them (turn headers,
 // speaker tags, tracker-stripped text), so packing measures what will actually be sent.
-function renderRollUpLines(messages, turnAt, cs, ce) {
+export function renderRollUpLines(messages, turnAt, cs, ce) {
   const lines = [];
   let turnMin = Infinity, turnMax = -Infinity;
   let lastTurn = null;
@@ -851,7 +856,7 @@ function packTurnChunk(messages, turnAt, cs, ce, fixed, limit, measure) {
 // Roles that are meta-layer, not story — never fed to the memory summarizer. Player-only
 // images, check pips, scene breaks, OOC directives and CYOA options are excluded; the
 // narration that follows them already carries what happened.
-function isNonStoryMessage(m) {
+export function isNonStoryMessage(m) {
   return !m || m.role === "image" || m.role === "check" || m.role === "meta" || m.role === "direct" || m.role === "choice";
 }
 
@@ -875,7 +880,7 @@ async function parseJsonObject(t) {
 // The full roll-up prompt, shared by the packing measurement and the per-chunk send — one
 // construction so the measured shell and the sent prompt can never drift. `block` is the
 // chunk's transcript; everything else is the fixed shell for that chunk.
-function buildRollUpInstruction({ block, multi, partCount, partIdx, prevSituation, prevThreads, digestTxt, refText }) {
+function buildRollUpInstruction({ block, multi, partCount, partIdx, prevSituation, prevThreads, refText }) { // digest retired [rpge-patch 009] — layers replaced it
   return [
         "You are the memory keeper for a text-based RPG. Below are RECENT EVENTS from the story, grouped under the [TURN n] header they happened on (most recent last), plus the STANDING RECORD — the LATEST SITUATION and OPEN THREADS exactly as the previous roll-up left them.",
         ...(multi ? [`NOTE: this bake is running in ${partCount} chronological parts (a long backlog and/or a transcript split to fit the context window) — this is part ${partIdx + 1} of ${partCount}. Summarize ONLY the RECENT EVENTS below; the STANDING RECORD already reflects the earlier parts.`] : []),
@@ -894,24 +899,22 @@ function buildRollUpInstruction({ block, multi, partCount, partIdx, prevSituatio
         "1) Write the LATEST SITUATION — ONE sentence, present tense, on where the hero is and what is happening right now. UPDATE the LATEST SITUATION above instead of replacing it: keep every element that still holds (a standing war, a curse, an alliance, a long pursuit, a hidden identity...) and fold in what these events changed. If the events contradict it, the events win — reflect the current truth.",
         "2) Record the events WORTH REMEMBERING long-term as durable memory entries. Include: plot developments, first meetings, relationship changes, promises made or broken, secrets revealed or learned (and by whom), alliances, betrayals, grudges, injuries, deaths, important items gained/lost/given, big reveals, discoveries, lasting location changes, and any fact a character now knows that will matter later. SKIP: trivial banter, pure atmosphere, routine actions, minor fights, and anything already implied by a more important entry.",
         "For each memory entry you write:",
-        "- text: 1–2 factual sentences, past tense, third person, using characters' exact names — SELF-CONTAINED (each entry is read alone): NEVER write a bare pronoun or vague pointer without its explicit antecedent IN THE SAME entry.",
+        "- text: 1–2 factual sentences, past tense, third person, using characters' exact names — SELF-CONTAINED (each entry is read alone): NEVER write a bare pronoun or vague pointer without its explicit antecedent IN THE SAME entry. EXCEPTION — importance 3: copy the commitment's wording as close to VERBATIM as the events allow (exact promise/deal/oath terms — who does what for whom, what is owed, any price or condition stated).",
+        "- importance: 1–3. 2 = a normal event (default). 3 = a COMMITMENT whose exact wording matters — a promise, deal, oath, vow, bargain, contract, ultimatum, binding agreement — recorded as close to verbatim as possible; importance-3 entries are kept word-for-word and are ALWAYS available to the storyteller. 1 = minor color worth keeping only when its topic comes up (a small purchase, a passing remark worth remembering).",
         "- turn: the [TURN n] header above the line(s) where the event happened.",
         `- owner: WHO knows this fact — "world" ONLY when it is genuinely public (town talk, proclaimed, spread beyond the scene). A fact merely shared by everyone present is NOT public: name exactly those present instead (a family dinner belongs to the family members, e.g. "Shipo, Lysandra, Mira"). Otherwise name exactly the character(s) who hold that knowledge, separating several names with ", ". A memory is NOT limited to secrets: a fact the hero and an NPC both witnessed belongs to both, a hero-only fact (something only the hero learned) names the hero, and NPC-private knowledge the hero hasn't learned (a secret agenda, a hidden identity) names just those NPCs (e.g. "Mira, Kael"). Never mark a fact as known by a character who was not there or was not told.`,
         "- triggers: 3–6 short lowercase keywords that should recall this memory later — the words people would say when the topic comes back up (names, places, objects, concepts). NOT generic words like \"went\", \"said\", \"saw\".",
         "3) RESOLVE existing memories that these events made FALSE or OBSOLETE — superseded, contradicted, or reversed (the lost pendant was just found; a presumed-dead character just returned; an oath was just broken). For each, add its EXACT text — copied character-for-character from the EXISTING MEMORIES list below — to the \"resolve\" array; that memory will be removed, so if the fact still matters in its new form, capture the CURRENT state as a fresh entry in \"memories\". NEVER resolve a memory merely for being old, and never resolve a fact that still stands.",
         "4) SPREAD OWNERSHIP when these events shared knowledge that an EXISTING MEMORY says only some character(s) knew — a secret was revealed, a private discovery became known to others, a hidden identity came out. For each such memory add an object to \"ownerUpdates\": \"text\" = its EXACT text copied from EXISTING MEMORIES, \"owner\" = who knows it NOW (the full current list — \"world\" only once it is genuinely public beyond those present, otherwise every holder, e.g. \"Shipo, Lysandra\"). Do NOT write a duplicate entry for the same fact — updating its owners is enough.",
         "5) List OPEN THREADS — 4 to 6 short one-line items (under ~15 words each) capturing what is IN MOTION right now: the hero's current objectives, unresolved promises or oaths, live grudges, rivalries or romances, unfulfilled quests, approaching threats. START from the OPEN THREADS above: keep every thread that is still in motion (reword it if its shape changed), drop any these events resolved or made obsolete, and add any genuinely new threads that emerged. Not history — what the story is reaching toward. If nothing is clearly in motion, describe the most pressing present situation.",
-        "6) Never repeat facts already covered by the EXISTING MEMORIES below, the DISTANT PAST digest (if any), or the OPEN THREADS you are keeping.",
+        "6) Never repeat facts already covered by the EXISTING MEMORIES below or the OPEN THREADS you are keeping.",
         "",
         refText,
-        ...(digestTxt
-          ? ["", "DISTANT PAST (world knowledge from long ago that fell off the live memory list as it filled up — kept only for continuity; do NOT re-record these facts):", digestTxt]
-          : []),
         "",
         "RECENT EVENTS:",
         block,
         "",
-        'Reply with ONLY a JSON object, no prose and no code fence, with exactly these keys: {"situation": "<one present-tense sentence>", "memories": [{"text": "...", "turn": 12, "owner": "world", "triggers": ["mill", "dagger", "lyra"]}], "resolve": ["<exact text of an EXISTING MEMORY that is now false or obsolete>"], "ownerUpdates": [{"text": "<exact text of an EXISTING MEMORY>", "owner": "<who knows it now>"}], "openThreads": ["<one-line thread>", "..."]}'
+        'Reply with ONLY a JSON object, no prose and no code fence, with exactly these keys: {"situation": "<one present-tense sentence>", "memories": [{"text": "...", "importance": 2, "turn": 12, "owner": "world", "triggers": ["mill", "dagger", "lyra"]}], "resolve": ["<exact text of an EXISTING MEMORY that is now false or obsolete>"], "ownerUpdates": [{"text": "<exact text of an EXISTING MEMORY>", "owner": "<who knows it now>"}], "openThreads": ["<one-line thread>", "..."]}'
       ].join("\n");
 }
 
@@ -988,12 +991,11 @@ export class MemorySystem {
       const measure = meter.count || ((s) => Math.ceil(String(s).length / PERCHANCE_CHARS_PER_TOKEN));
       const prevSituation0 = str(state.latestSituation).trim();
       const prevThreads0 = (Array.isArray(state.openThreads) ? state.openThreads : []).map((t) => str(t).trim()).filter(Boolean);
-      const digestTxt0 = typeof state.memories.digest === "string" ? state.memories.digest.trim() : "";
       const refText0 = buildRefText(existingList, heroName);
       // Shell measured without the multi-note (it only exists when packing splits) and without
       // the per-chunk BM25 top-up (bounded to ROLLUP_REF_TOPUP entries): the
       // margin below absorbs both, plus ref growth as sub-chunks record.
-      const fixedTokens = measure(buildRollUpInstruction({ block: "", multi: false, partCount: 1, partIdx: 0, prevSituation: prevSituation0, prevThreads: prevThreads0, digestTxt: digestTxt0, refText: refText0 }));
+      const fixedTokens = measure(buildRollUpInstruction({ block: "", multi: false, partCount: 1, partIdx: 0, prevSituation: prevSituation0, prevThreads: prevThreads0, refText: refText0 }));
       const limit = PERCHANCE_INPUT_CAP - ROLLUP_TOKEN_MARGIN;
       const packed = [];
       for (const [cs, ce] of chunks) packed.push(...packTurnChunk(state.messages, turnAt, cs, ce, fixedTokens, limit, measure));
@@ -1045,9 +1047,8 @@ export class MemorySystem {
 
       const prevSituation = str(state.latestSituation).trim();
       const prevThreads = (Array.isArray(state.openThreads) ? state.openThreads : []).map((t) => str(t).trim()).filter(Boolean);
-      const digestTxt = typeof state.memories.digest === "string" ? state.memories.digest.trim() : "";
 
-      const instruction = buildRollUpInstruction({ block, multi, partCount: chunks.length, partIdx: ci, prevSituation, prevThreads, digestTxt, refText });
+      const instruction = buildRollUpInstruction({ block, multi, partCount: chunks.length, partIdx: ci, prevSituation, prevThreads, refText });
 
       sentChunks.push({ idx: ci, count: chunks.length, turnMin, turnMax, text: subUser(instruction, heroName) });
       this.lastRollUpCalls = { turn: state.turn || 0, chunks: sentChunks.slice() };
@@ -1153,7 +1154,10 @@ export class MemorySystem {
         const owner = normalizeOwner(e.owner, heroName);
         let triggers = splitKeywords(e.triggers);
         if (!triggers.length) triggers = deriveTriggers(text);
-        existingList.push({ text, turn, owner, triggers, pinned: false, ts: Date.now() });
+        // [rpge-patch 009] importance: 1–3 (default 2). 3 = verbatim commitment — pinned, so it
+        // survives rewinds and the feed always carries it (see the rp-engine MEMORIES block).
+        const importance = [1, 2, 3].includes(Math.round(Number(e.importance)) || 0) ? Math.round(Number(e.importance)) : 2;
+        existingList.push({ text, turn, owner, triggers, pinned: importance === 3, importance, ts: Date.now() });
         added++;
       }
 

@@ -242,3 +242,51 @@ request like "a shopkeeper") → the section is empty and the prompt is identica
 (~1.5 k tokens) — still well under the Perchance input cap.
 
 **Revert:** remove the `matchedLore` lines and the import.
+
+## [rpge-patch 009] Layered narrative history + importance-tagged memories (Summaryception-style)
+
+**Files:** NEW `src/scripts/memory-history.js`; `src/scripts/memory-system.js`; `src/scripts/rp-engine.js`;
+`src/scripts/main.js`; `src/styles.css`.
+
+**Why (user pains + decisions 2026-11-18, handoff §8):** long games lost specifics — the GM re-introduced
+met characters, forgot promises/deals, treated 50-turn-old actions as novel, and attributed facts to
+nameless characters (later named). User approved: layered delta summaries ALWAYS fed + importance
+1–3 (3 = verbatim) + attribution rules. Budget 10000 tokens, cadence every 5 turns from turn 10,
+30 snippets/layer merging 3, backlog auto-offer, importance-3 pinned, DISTANT PAST digest retired
+and migrated into the layers.
+
+**Change:**
+- NEW `memory-history.js`: layer stack in `state.memories.history` (`{layers: [[{text, from, to}]],
+  summarizedUpTo}` — anchored player turns, same notion as the roll-up). `historyDue` (turn ≥ 10 &&
+  ≥ 5 lagged unsummarized turns), `runHistorySnippet` (delta-summarizer call on route "memory" —
+  the cheap role; prior context = every snippet trimmed to 12k chars; 40–90-word prose delta;
+  nameless characters stay role-descriptions), promotion (layer ≥ 30 → first promotion into an
+  EMPTY deeper layer copies the oldest snippet VERBATIM as the seed, no LLM call; later merges
+  summarize 3 snippets against the destination layer; deepest layer self-merges),
+  `renderHistory` (oldest→newest, budget = `rpge.memoryHistory.budgetTokens` default 10000,
+  clamped ≤ bridgedInputCap − 2000; over budget trims the shallowest layer's oldest snippets —
+  least coverage per token; the newest tail snippet never drops), `invalidateFromTurn` (rewinds),
+  `migrateDigest` (legacy digest → deep-layer seed once), `backlogEligible`.
+- `memory-system.js`: `messageTurns`/`renderRollUpLines`/`isNonStoryMessage`/`lagStartIndex`/`str`
+  exported (reused); roll-up prompt: memories gain `importance` 1–3 (3 = verbatim commitment —
+  the prompt demands near-verbatim wording for promises/deals/oaths; importance-3 entries are
+  auto-PINNED so they survive rewinds); the digest input removed from the prompt (retired);
+  `migrateMemoryEntry` normalizes `importance` (default 2).
+- `rp-engine.js`: the DISTANT PAST digest block REPLACED by an always-fed `NARRATIVE HISTORY`
+  block (ground-truth framing: never re-introduce a met character, never act like an old event
+  didn't happen, never contradict); NEW `STANDING COMMITMENTS` block: importance-3 memories always
+  fed (most recent 15, ~3000 chars), tagged VERBATIM COMMITMENT — binding until resolved. Both
+  accounted automatically (context-budget reuses the real buildContext).
+- `main.js`: history tick before each roll-up in `saveAndMaybeMemory`; all 7 rewind sites also
+  call `invalidateFromTurn` (snippets covering the rewritten span drop; the tick re-covers);
+  `normalize()` normalizes the stack + migrates the digest once; Memory panel gains a **History**
+  tab (layer stats, preview of exactly what the GM receives, budget setting, snippet
+  edit/delete, Build button — 10 snippets per click); `enterSession` offers a one-time backlog
+  build for old sessions (per-session dismiss flag, 60-snippet cap per run).
+
+**Impact when bridge is off:** the history still builds (Perchance route "memory" — small calls);
+the render budget falls back to the configured 10000. Old sessions without history behave as
+before (empty history block). The digest no longer feeds even for old saves (migrated instead).
+
+**Revert:** delete memory-history.js + its imports/wiring; restore the digest block in rp-engine.js;
+remove the importance lines in memory-system.js. (Large surface — easiest to keep.)
