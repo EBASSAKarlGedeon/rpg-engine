@@ -1112,13 +1112,27 @@ export class MemorySystem {
       // OPEN THREADS: what is in motion right now (objectives, unresolved promises, live
       // grudges/relationships) — refreshed on the same cadence as the latest situation, always fed to
       // the GM so standing goals survive even as individual memories age out of the per-turn feed.
+      // [rpge-patch 013] each thread is {text, from}: `from` is the ENGINE-stamped planted turn
+      // (never read from the model — it would age threads dishonestly). A thread that already
+      // existed keeps its original stamp; a brand-new one is stamped with the current turn; a
+      // legacy string thread (no stamp) starts aging from now, not from zero-trust of the model.
       const threadList = Array.isArray(parsed.openThreads) ? parsed.openThreads : (Array.isArray(parsed.threads) ? parsed.threads : null);
       if (threadList) {
+        const prevFrom = new Map();
+        for (const p of (Array.isArray(state.openThreads) ? state.openThreads : [])) {
+          const k = (typeof p === "string" ? p : (p && p.text)).trim().toLowerCase();
+          if (k && !prevFrom.has(k)) prevFrom.set(k, (p && typeof p === "object" && typeof p.from === "number" && p.from >= 0) ? p.from : null);
+        }
+        const nowTurn = state.turn || 0;
         state.openThreads = threadList
-          .map((t) => str(typeof t === "string" ? t : (t && (t.text || t.thread))).replace(/^[-•*]\s*/, "").trim())
+          .map((t) => (typeof t === "string" ? t : String(t && (t.text || t.thread)) || "").replace(/^[-•*]\s*/, "").trim().slice(0, 160))
           .filter((t) => t && !/^(none|nothing|n\/a|no open threads)$/i.test(t))
           .slice(0, 8)
-          .map((t) => t.slice(0, 160));
+          .map((t) => {
+            const k = t.toLowerCase();
+            const prev = prevFrom.has(k) ? prevFrom.get(k) : null;
+            return { text: t, from: (prev != null) ? prev : nowTurn, lastFired: null };
+          });
       }
 
       const seen = new Set(existingList.map((m) => str(m.text).toLowerCase()));

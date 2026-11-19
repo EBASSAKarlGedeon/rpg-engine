@@ -116,6 +116,7 @@ let bundledWorlds = []; // every bundled world under src/game/worlds/ (manifest.
 let defaultWorld = null; // the bundled world flagged `default` in the manifest — universal fallback
 let currentWorldId = null; // which world's content is loaded into the globals/engine right now
 let currentWorldName = ""; // its display name, so a session can remember the world it was built in
+let currentWorldThreadFires = true; // [rpge-patch 013] the bound world's thread-dice toggle (world.threadFires !== false)
 let engineImagePrompt = ""; // the engine's default scene-image prompt (image-prompt.md) — the fallback for worlds without imagePrompt
 let worldNameCache = {}; // worldId -> display name, for session rows (refreshed with the library)
 let gameTitle = "MNO RPG ENGINE"; // the page title from $meta (the chat topbar brand + the nav brand)
@@ -277,7 +278,8 @@ function newSession(id, worldId, startId) {
     initialTrackers: applyTrackerStartOverrides(initialTrackers(trackerDefs, character.stats), trackerDefs, startOverrides, character.stats),
     latestSituation: "", // one-line present-tense snapshot (refreshed each memory roll-up, always fed to the GM as LATEST SITUATION)
     latestSituationTurn: 0, // session turn the situation was last (re)written — roll-up or hand-edit; ages the GM's LATEST SITUATION line without touching the roll-up cadence
-    openThreads: [], // one-line "what is in motion right now" items, refreshed by each memory roll-up and always fed to the GM
+    openThreads: [], // one-line "what is in motion right now" items ({text, from, lastFired} since patch 013), refreshed by each memory roll-up and always fed to the GM
+    threadDirective: null, // [rpge-patch 013] {text, targetTurn} — the d20 thread-dice verdict for the NEXT turn's GM context (see saveAndMaybeMemory)
     map: null,       // { loc, status: 'loading'|'ready'|'error', pois, hero, scale, at } — surroundings of current location (scale: indoor|local|outdoor)
     mapCache: {},    // per-region POI cache: { [regionKey]: { pois, hero, scale } }
     surroundingsLoc: null, // last region whose SURROUNDINGS were fed to the GM (avoids re-feeding)
@@ -770,6 +772,7 @@ function scheduleCommunityDeferredWork() {
 function applyWorld(world, startId, customStartText) {
   currentWorldId = world.meta.id;
   currentWorldName = world.meta.name || "";
+  currentWorldThreadFires = world.threadFires !== false; // [rpge-patch 013]
   vibeText = world.narrativeVibe.trim();
   scenarioText = world.scenario;
   // The session's chosen opening (startId) when it still exists, else the world's first —
@@ -9262,7 +9265,17 @@ function renderSituationPanel(body) {
 // unresolved promises, grudges and threats. Always fed to the GM, so the player can see the
 // threads the story is currently tracking. Appends into the Memory panel's body (sub-tab bar is
 // already there — must not clear it).
+// [rpge-patch 013] threads are {text, from, lastFired}; each row shows an age chip and, when the
+// d20 detonator has scheduled this thread for the next beat, a 🎯 badge.
+function normThreadRow(t) {
+  const text = (typeof t === "string") ? t.trim() : String(t && t.text || "").trim();
+  if (!text) return null;
+  const from = (t && typeof t === "object" && typeof t.from === "number" && t.from >= 0) ? t.from : null;
+  return { text, from };
+}
 function renderThreadsPanel(body) {
+  const nowT = state.turn || 0;
+  const dir = state.threadDirective;
   const h = document.createElement("div");
   h.className = "p-sec";
   h.innerHTML = `<div class="p-label">Open threads</div>
@@ -9277,36 +9290,41 @@ function renderThreadsPanel(body) {
     const v = await TextPopup.open({ title: "Add thread", placeholder: "What's in motion…", rows: 2, confirmText: "Add", cancelText: "Cancel" });
     if (v === null || !String(v).trim()) return;
     if (!Array.isArray(state.openThreads)) state.openThreads = [];
-    state.openThreads.push(String(v).trim().slice(0, 160));
+    state.openThreads.push({ text: String(v).trim().slice(0, 160), from: state.turn || 0, lastFired: null });
     store.save(state).catch((e) => { if (typeof isStorageError === "function" && (isStorageError(e) || (e && e.isStorageUnavailable))) { try { notifyStorageError(notify, "saving", e); } catch (_) {} } else console.warn("[session] background save failed:", e); });
     renderMemoryPanel(body);
   };
   body.appendChild(addBtn);
 
   const threads = (Array.isArray(state.openThreads) ? state.openThreads : [])
-    .map((t) => String(t || "").trim()).filter(Boolean);
+    .map(normThreadRow).filter(Boolean);
   const wrap = document.createElement("div");
   wrap.className = "memlist";
   if (threads.length) {
     threads.forEach((t, i) => {
+      const age = (t.from != null) ? Math.max(0, nowT - t.from) : null;
+      const chip = (age != null) ? `<span class="mem-age dim">· planted ${age} turn${age === 1 ? "" : "s"} ago</span>` : "";
+      const fire = (dir && dir.text && dir.text === t.text) ? `<span class="mem-age dim">· 🎯 resurfaces next turn</span>` : "";
       const row = document.createElement("div");
       row.className = "memrow";
-      row.innerHTML = `<span class="mem-body"><span class="memtxt">${i + 1}. ${esc(t)}</span></span>
+      row.innerHTML = `<span class="mem-body"><span class="memtxt">${i + 1}. ${esc(t.text)}</span>${chip}${fire}</span>
         <span class="acts-btns"><button class="mini" data-act="edit" title="Edit">✎</button><button class="mini" data-act="del" title="Delete">✖</button></span>`;
       row.querySelector('[data-act="edit"]').onclick = async () => {
-        const v = await TextPopup.open({ title: "Edit thread", value: t, rows: 2, confirmText: "Save" });
-        if (v === null || !String(v).trim() || String(v).trim() === t) return;
-        const idx = (state.openThreads || []).findIndex((x) => String(x || "").trim() === t);
+        const v = await TextPopup.open({ title: "Edit thread", value: t.text, rows: 2, confirmText: "Save" });
+        if (v === null || !String(v).trim() || String(v).trim() === t.text) return;
+        const idx = (state.openThreads || []).findIndex((x) => normThreadRow(x) && normThreadRow(x).text === t.text);
         if (idx < 0) { renderMemoryPanel(body); return; }
-        state.openThreads[idx] = String(v).trim().slice(0, 160);
+        const keep = state.openThreads[idx];
+        state.openThreads[idx] = { text: String(v).trim().slice(0, 160), from: (keep && typeof keep === "object" && typeof keep.from === "number") ? keep.from : (state.turn || 0), lastFired: null };
         store.save(state).catch((e) => { if (typeof isStorageError === "function" && (isStorageError(e) || (e && e.isStorageUnavailable))) { try { notifyStorageError(notify, "saving", e); } catch (_) {} } else console.warn("[session] background save failed:", e); });
         renderMemoryPanel(body);
       };
       row.querySelector('[data-act="del"]').onclick = async () => {
         const ok = await ConfirmPopup.open({ title: "Delete thread", message: "Remove this open thread? The next roll-up may add new ones, but this one is gone.", confirmText: "Delete", danger: true });
         if (!ok) return;
-        const idx = (state.openThreads || []).findIndex((x) => String(x || "").trim() === t);
+        const idx = (state.openThreads || []).findIndex((x) => normThreadRow(x) && normThreadRow(x).text === t.text);
         if (idx >= 0) state.openThreads.splice(idx, 1);
+        if (state.threadDirective && state.threadDirective.text === t.text) state.threadDirective = null;
         store.save(state).catch((e) => { if (typeof isStorageError === "function" && (isStorageError(e) || (e && e.isStorageUnavailable))) { try { notifyStorageError(notify, "saving", e); } catch (_) {} } else console.warn("[session] background save failed:", e); });
         renderMemoryPanel(body);
       };
@@ -10039,9 +10057,21 @@ function normalize(d, opts) {
     else e.lifeWhere = e.lifeWhere.slice(0, 120);
     if (typeof e.lifeTick !== "number" || e.lifeTick < 0) e.lifeTick = -1;
   }
-  // open threads survive as plain strings; older sessions simply have none until the next roll-up
+  // [rpge-patch 013] open threads carry {text, from, lastFired}: `from` = engine-stamped planted
+  // turn (a legacy string thread starts aging NOW — never backdated from model data), `lastFired`
+  // = the turn the d20 detonator last fired it (cooldown). The pending resurface directive
+  // survives a reload in validated shape.
   if (!Array.isArray(d.openThreads)) d.openThreads = [];
-  else d.openThreads = d.openThreads.map((t) => String(t && (t.text || t) || "").trim()).filter(Boolean).slice(0, 8).map((t) => t.slice(0, 160));
+  else {
+    const t0 = (typeof d.turn === "number" && d.turn >= 0) ? Math.floor(d.turn) : 0;
+    d.openThreads = d.openThreads.map((t) => {
+      const text = String((t && (t.text || t)) || "").trim().slice(0, 160);
+      if (!text) return null;
+      return { text, from: (t && typeof t === "object" && typeof t.from === "number" && t.from >= 0) ? Math.floor(t.from) : t0, lastFired: (t && typeof t === "object" && typeof t.lastFired === "number" && t.lastFired >= 0) ? Math.floor(t.lastFired) : null };
+    }).filter(Boolean).slice(0, 8);
+  }
+  if (!d.threadDirective || typeof d.threadDirective !== "object" || typeof d.threadDirective.text !== "string" || typeof d.threadDirective.targetTurn !== "number") d.threadDirective = null;
+  else d.threadDirective = { text: d.threadDirective.text.trim().slice(0, 160), targetTurn: Math.floor(d.threadDirective.targetTurn) };
   if (!d.map) d.map = null;
   if (!d.mapCache || typeof d.mapCache !== "object") d.mapCache = {};
   delete d.worldMap;
@@ -12922,6 +12952,24 @@ export function openNpcLinkMenu(anchor, msg) {
   document.addEventListener("keydown", npcLinkMenuKey);
 }
 
+// [rpge-patch 013] Thread-dice constants + candidate picker. A thread is fireable when the
+// engine has stamped it (from >= 0), it has aged past THREAD_FIRE_MIN_AGE, and it has not fired
+// within THREAD_FIRE_COOLDOWN turns. Oldest-first: the longest-standing debt gets the roll.
+const THREAD_FIRE_MIN_AGE = 3;
+const THREAD_FIRE_COOLDOWN = 4;
+function pickFireThread(st) {
+  const nowT = st.turn || 0;
+  let best = null;
+  for (const t of (st.openThreads || [])) {
+    const o = (t && typeof t === "object") ? t : null;
+    if (!o || typeof o.from !== "number" || o.from < 0) continue;
+    if ((nowT - o.from) < THREAD_FIRE_MIN_AGE) continue;
+    if (typeof o.lastFired === "number" && o.lastFired >= 0 && (nowT - o.lastFired) < THREAD_FIRE_COOLDOWN) continue;
+    if (!best || o.from < best.from) best = o;
+  }
+  return best;
+}
+
 async function saveAndMaybeMemory() {
   try {
     await store.save(state);
@@ -12972,6 +13020,27 @@ async function saveAndMaybeMemory() {
     // New/changed memories get vectors in the background (per-turn ranking
     // queues misses anyway — this just covers them sooner).
     try { warmupTexts((state.memories?.auto || []).map((m) => memoryDocText(m, state.character?.name || ""))); } catch (e) {}
+    // [rpge-patch 013] Thread dice — the narrative-debt detonator (client-side, no AI call,
+    // same d20 family as the skill checks). Runs once per roll-up (threads are only fresh
+    // here): drop any stale directive, then roll against the OLDEST thread past its cooldown.
+    // Threshold scales with age — young 18+, mid 14+, old 10+, ancient 8+ — so the longer a
+    // debt goes unaddressed, the more insistent it gets. On a hit, the NEXT turn's GM context
+    // carries a resurface directive (injected in rp-engine buildContext, targetTurn-matched so
+    // re-rolls of that turn re-inject and later turns never see it).
+    if (state.threadDirective && (state.threadDirective.targetTurn || 0) <= state.turn) state.threadDirective = null;
+    if (currentWorldThreadFires) {
+      const cand = pickFireThread(state);
+      if (cand) {
+        const age = state.turn - cand.from;
+        const need = age >= 16 ? 8 : age >= 10 ? 10 : age >= 5 ? 14 : 18;
+        const roll = 1 + Math.floor(Math.random() * 20);
+        if (roll >= need) {
+          cand.lastFired = state.turn;
+          state.threadDirective = { text: cand.text, targetTurn: state.turn + 1 };
+          try { notify("🎯 An old thread resurfaces next turn: " + (cand.text.length > 70 ? cand.text.slice(0, 67) + "…" : cand.text)); } catch (_) {}
+        }
+      }
+    }
   }
   // Off-screen NPC private life: one background call every NPC_LIFE_EVERY_TURNS
   // turns advances a few NPCs the hero hasn't seen in a while. It writes only

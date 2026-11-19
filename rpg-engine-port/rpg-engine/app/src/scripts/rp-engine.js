@@ -827,7 +827,29 @@ export class RPEngine {
     // the latest situation and always fed, so standing goals keep driving the story even after the
     // individual memories that started them age out of the per-turn MEMORIES feed.
     if (state.openThreads && state.openThreads.length) {
-      parts.push("OPEN THREADS (what is in motion right now. Keep them progressing and resolve them naturally when the moment is right; let new threads emerge from events. Not necessarily public knowledge):\n" + state.openThreads.map((t) => "- " + t).join("\n"));
+      // [rpge-patch 013] threads carry an engine-stamped planted turn ({text, from}); a plain
+      // string (old save not yet re-stamped) renders without an age. Long-unaddressed threads
+      // are flagged OVERDUE in the feed itself — the GM is TOLD the debt exists every turn;
+      // the d20 resurfacing directive below is the separate, opt-out enforcement layer.
+      const nowT = state.turn || 0;
+      const threadLines = state.openThreads.map((t) => {
+        const text = (typeof t === "string") ? t.trim() : String(t && t.text || "").trim();
+        if (!text) return null;
+        const from = (t && typeof t === "object" && typeof t.from === "number" && t.from >= 0) ? t.from : null;
+        if (from == null) return "- " + text;
+        const age = Math.max(0, nowT - from);
+        const overdue = age >= 10 ? " — OVERDUE: give this thread visible progress or resolution soon" : "";
+        return `- ${text} (planted ${age} turn${age === 1 ? "" : "s"} ago${overdue})`;
+      }).filter(Boolean).join("\n");
+      parts.push("OPEN THREADS (what is in motion right now. Keep them progressing and resolve them naturally when the moment is right; let new threads emerge from events. Not necessarily public knowledge):\n" + threadLines);
+    }
+    // [rpge-patch 013] fired-thread directive: a client-side d20 (see saveAndMaybeMemory in
+    // main.js) decided an old thread resurfaces THIS beat. Injected only on its target turn
+    // (state.turn === targetTurn), so a re-roll of the same turn re-injects it and it never
+    // leaks into later turns; saveAndMaybeMemory clears it once the turn completes.
+    const tdir = state.threadDirective;
+    if (tdir && typeof tdir.targetTurn === "number" && tdir.targetTurn === (state.turn || 0)) {
+      parts.push(`DIRECTION — OPEN THREAD RESURFACES NOW: the thread "${tdir.text}" forces its way back into this beat (an event, a messenger, a consequence, a reminder — something the player did not schedule). Weave it into this reply.`);
     }
 
     // The session NPCs currently in play — named in the recent chat/action/location, or seen

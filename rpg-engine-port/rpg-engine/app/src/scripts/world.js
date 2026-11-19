@@ -255,6 +255,7 @@ export function emptyWorld(id = "Basic RPG", name = "Basic RPG") {
     meta: { id, name, description: "", author: "", authorId: "", tags: [], nsfw: false, commentsOff: false, remix: null, cover: "", authorNotes: "", createdAt: "", updatedAt: "" },
     narrativeVibe: "",
     proseRules: true,
+    threadFires: true, // [rpge-patch 013] open-thread d20 resurfacing (default ON)
     lorebook: [],
     scenario: "",
     start: "",
@@ -541,6 +542,8 @@ export function normalizeWorld(obj) {
     worldDescription: str(obj.worldDescription),
     // [rpge-patch 010] per-world prose-pack toggle (default ON; explicit false = off).
     proseRules: proseRulesOn(obj),
+    // [rpge-patch 013] per-world thread-dice toggle (default ON; explicit false = off).
+    threadFires: (obj && obj.threadFires !== false),
     lorebook: normalizeLorebook(obj.lorebook),
     scenario: str(obj.scenario),
     start: starts[0] ? starts[0].text : str(obj.start),
@@ -652,6 +655,7 @@ export function worldToFile(world) {
     narrativeVibe: world.narrativeVibe,
     worldDescription: world.worldDescription || "",
     proseRules: proseRulesOn(world),
+    threadFires: (world && world.threadFires !== false),
     lorebook: (world.lorebook || []).map((e) => ({
       title: e.title || "", type: e.type || "lore", activation: e.activation || "always",
       keywords: e.keywords || [], content: e.content || ""
