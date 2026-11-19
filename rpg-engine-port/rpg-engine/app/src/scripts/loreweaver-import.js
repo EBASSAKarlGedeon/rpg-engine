@@ -777,7 +777,17 @@ export async function mountImportsPage(pane, ctx) {
   // server-side. When the sync completes, re-read the dropdown if it found nothing.
   const onSynced = () => { if (!$("lwimpTargetWorld").value) refresh(); };
   window.addEventListener("rpge-saves-synced", onSynced);
+  // The sync event is one-shot and can fire BEFORE this page mounts (the reconcile starts on
+  // boot idle, the landing mounts later), which would leave the dropdown empty forever. Poll a
+  // few times until a world shows up; each tick only fires while the select is still empty.
+  let pollTimer = 0, pollTries = 0;
+  const pollWorlds = () => {
+    if (!$("lwimpTargetWorld") || $("lwimpTargetWorld").value) return;
+    refresh();
+    if (++pollTries < 6) pollTimer = setTimeout(pollWorlds, 6000);
+  };
+  pollTimer = setTimeout(pollWorlds, 6000);
   refresh();
   // The page's teardown: drop the sync listener so a re-mount never double-binds.
-  return () => window.removeEventListener("rpge-saves-synced", onSynced);
+  return () => { window.removeEventListener("rpge-saves-synced", onSynced); clearTimeout(pollTimer); };
 }
