@@ -259,7 +259,10 @@ export function normalizeMemories(memories, heroName = "") {
   return {
     auto: norm(memories && memories.auto, false),
     manual: norm(memories && memories.manual, true),
-    digest: digest.length > DIGEST_MAX_CHARS ? digest.slice(-DIGEST_MAX_CHARS) : digest
+    digest: digest.length > DIGEST_MAX_CHARS ? digest.slice(-DIGEST_MAX_CHARS) : digest,
+    // [rpge-patch 009] the layered narrative history rides along raw — the load path sanitizes it
+    // (normalizeHistory) right after, and dropping it here would wipe the stack on every open.
+    history: (memories && memories.history) || null
   };
 }
 

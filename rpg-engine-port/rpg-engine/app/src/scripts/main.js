@@ -9873,7 +9873,7 @@ function normalize(d, opts) {
   // [rpge-patch 009] layered narrative history: normalize the stored stack, and migrate the
   // retired DISTANT PAST digest into it as a deep-layer seed (once; only when nothing is
   // summarized yet, so an established history is never disturbed).
-  try { normalizeHistory(d.memories.history); migrateDigest(d); } catch (e) { console.warn("[history] init failed:", e); }
+  try { d.memories.history = normalizeHistory(d.memories.history); migrateDigest(d); } catch (e) { console.warn("[history] init failed:", e); }
   // 🔗-menu link overrides (see npcLinkRuleFor in npc-system.js). Sanitized, never trusted blind:
   // only well-formed rules survive a load, so a stale hand-edit can't redirect lookups anywhere odd.
   if (!d.npcLinkRules || typeof d.npcLinkRules !== "object" || Array.isArray(d.npcLinkRules)) d.npcLinkRules = {};
