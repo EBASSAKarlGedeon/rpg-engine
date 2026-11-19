@@ -49,9 +49,20 @@
     return root;
   }
 
-  function openOverlay() {
+  // openOverlay(target): with a deep-link target (postMessage into the app, see main.js's
+  // rpgeOpen listener) the game opens straight on it — "imports" mounts the Import page,
+  // "settings/aimodel" opens the Settings popup on AI Model. Works from the chat too (the
+  // app re-enters the landing first); safe when the iframe is still loading (posted on load).
+  function openOverlay(target) {
+    if (target && typeof target !== "string") target = undefined; // click handlers pass the event object
     ensureOverlay();
-    if (!frame.getAttribute("src")) frame.setAttribute("src", APP_URL); // load lazily on first open
+    const post = () => { try { frame.contentWindow.postMessage({ rpgeOpen: true, target }, window.location.origin); } catch (e) {} };
+    if (!frame.getAttribute("src")) {
+      frame.setAttribute("src", APP_URL); // load lazily on first open
+      frame.addEventListener("load", () => setTimeout(post, 400), { once: true }); // let the app boot
+    } else {
+      setTimeout(post, 100); // already loaded — give the boot listeners a beat
+    }
     root.hidden = false;
     document.documentElement.classList.add("rpge-open");
   }

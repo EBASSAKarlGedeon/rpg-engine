@@ -1,7 +1,7 @@
-// Verifies the Loreweaver bridge shim end-to-end: loreweaver-bridge.html loads connection
-// profiles from /api/settings/get, the "Test call" goes through the mock Loreweaver server,
-// and the request is parameterised by the SELECTED PROFILE (api source, custom_url, model,
-// secret_id, preset sampling). Also checks the key never leaves the server side.
+// Verifies the bridge end-to-end through the app's Settings → AI Model section [rpge-patch 018]: the section
+// loads connection profiles from /api/settings/get, defaults to the SELECTED PROFILE, and the
+// "Test call" goes through the mock Loreweaver server parameterised by the profile (api source,
+// custom_url, model, secret_id, preset sampling). Also checks the key never leaves the server.
 //   node tools/check-bridge.js [screenshot.png]
 // (the script starts a combined static + mock-Loreweaver server on 8765 — same origin, like
 //  production where the Loreweaver backend serves the app)
@@ -124,35 +124,42 @@ const staticSrv = http.createServer((req, res) => {
 (async () => {
   await new Promise((r) => staticSrv.listen(STATIC_PORT, "127.0.0.1", r));
 
-  const [shot] = process.argv.slice(2);
-  const url = `http://127.0.0.1:${STATIC_PORT}/loreweaver-bridge.html`;
+  // [rpge-patch 018] the bridge page is gone — its controls live in the app's Settings →
+  // AI Model section now. The shim checks below (direct fetch + role matrix) are unchanged;
+  // the UI part opens the app and drives that section instead.
+  const url = `http://127.0.0.1:${STATIC_PORT}/index.html`;
   const browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const problems = [];
   page.on("pageerror", (e) => problems.push("pageerror: " + e.message.slice(0, 160)));
   // only local traffic
   await page.route("**/*", (r) => (/^http:\/\/127\.0\.0\.1/.test(r.request().url()) ? r.continue() : r.abort()));
-  await page.addInitScript(() => {
-    localStorage.setItem("mno.aiProvider", JSON.stringify({
-      provider: "openai", providers: { openai: { baseUrl: "http://placeholder.invalid/v1", model: "engine-model" } },
-    }));
-    localStorage.setItem("mno.aiProviderKey", JSON.stringify({ openai: "placeholder" }));
-  });
 
   await page.goto(url);
-  await page.waitForTimeout(500);
+  await page.waitForSelector(".hn-item, #transcriptEl", { timeout: 30000 });
+  await page.waitForTimeout(1500);
+  // open the Settings popup and switch to the AI Model section
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("mno:open-settings", { detail: {} })));
+  await page.waitForSelector(".pf-md-nav", { timeout: 15000 });
+  await page.evaluate(() => {
+    const btns = [...document.querySelectorAll(".pf-md-nav button, .pf-md-nav a")];
+    const t = btns.find((x) => /AI Model/i.test(x.textContent || ""));
+    if (t) t.click();
+  });
+  await page.waitForSelector(".pf-lw-profile", { timeout: 20000 });
 
-  // the config page itself: profile dropdown loaded, toggle on, save, run the built-in test
-  const opt = await page.locator("#profile option").first().textContent();
-  if (!/Mock Profile/.test(opt)) problems.push("profile dropdown did not load: " + JSON.stringify(opt));
-  await page.locator("#enabled").check();
-  await page.locator("#save").click();
-  const stateTxt = await page.locator("#state").textContent();
-  if (!/on/i.test(stateTxt)) problems.push("state did not show ON after save");
-  await page.locator("#test").click();
-  await page.waitForTimeout(2500);
-  const msg = await page.locator("#msg").textContent();
-  if (!/Connected through Loreweaver/i.test(msg)) problems.push("test call failed: " + JSON.stringify(msg));
+  // the profile dropdown must be fed from /api/settings/get and default to the
+  // selected profile (the section auto-picks it on first run)
+  const opts = await page.$$eval(".pf-lw-profile option", (os) => os.map((o) => o.textContent));
+  if (!opts.some((o) => /Mock Profile/.test(o))) problems.push("profile dropdown did not load: " + JSON.stringify(opts));
+  const profVal = await page.$eval(".pf-lw-profile", (s) => s.value);
+  if (profVal !== PROFILE.id) problems.push("profile did not default to the selected profile: " + profVal);
+  const ctxVal = await page.$eval(".pf-lw-ctx", (s) => s.value);
+  if (Number(ctxVal) !== 16384) problems.push("context budget default wrong: " + ctxVal);
+  await page.click(".pf-lw-test");
+  await page.waitForFunction(() => /Connected|✖/.test(document.querySelector(".pf-lw-status").textContent), { timeout: 15000 });
+  const statusTxt = await page.$eval(".pf-lw-status", (e) => e.textContent);
+  if (!/Connected/.test(statusTxt)) problems.push("test call failed: " + statusTxt);
 
   // and the same flow through a plain page fetch (what ai-provider.js does): engine asks for
   // its own baseUrl/model, the bridge must replace them with the profile's.
@@ -214,6 +221,7 @@ const staticSrv = http.createServer((req, res) => {
     if (stream.temperature !== 0.42) problems.push("preset temperature missing on stream call: " + stream.temperature);
   }
 
+  const [shot] = process.argv.slice(2);
   console.log("calls:", JSON.stringify(CALL_LOG));
   if (shot) await page.screenshot({ path: shot });
   await browser.close();

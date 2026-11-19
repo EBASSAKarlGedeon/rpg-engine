@@ -6,61 +6,13 @@ import { saveSettingsDebounced } from "../../../../script.js";
 const extensionName = "rpg-engine";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
-// Same-window overlay pages (bridge / imports), like the game — no new Electron BrowserWindow
-// renderer spawn, so no window-creation delay. Same origin, so they see the session.
+// Same-window overlay page: the full game. The old bridge/imports overlay pages are gone
+// since [rpge-patch 018] — their logic lives INSIDE the game app now (Settings → AI Model
+// section, and the "Import from Loreweaver" landing page), and these buttons deep-link there.
 // The full game app lives inside the port folder. Its own wrapper (rpg-engine-port/rpg-engine/index.js)
 // adds the floating ⚔ launcher + wand-menu entry + full-screen overlay, and exposes window.rpgEngine.
 
-const PAGE_URLS = {
-    bridge: new URL("./rpg-engine-port/rpg-engine/app/loreweaver-bridge.html", import.meta.url).href,
-    imports: new URL("./rpg-engine-port/rpg-engine/app/loreweaver-import.html", import.meta.url).href,
-};
-const PAGE_TITLES = { bridge: "LOREWEAVER BRIDGE", imports: "LOREWEAVER IMPORTS" };
-const overlayPages = {};
-
-// One overlay per page id: {root, frame}. Reuses the game-overlay pattern (iframe in a bar'd
-// root, hidden not removed, so state survives close/open).
-function makeOverlayPage(id) {
-    const root = document.createElement("div");
-    root.id = "rpge-page-" + id;
-    root.className = "rpge-page-root"; // styled by style.css (class-scoped, any overlay page)
-    root.hidden = true;
-    const bar = document.createElement("div");
-    bar.className = "rpge-bridge-bar";
-    const t = document.createElement("span");
-    t.className = "rpge-bridge-title";
-    t.textContent = PAGE_TITLES[id];
-    const close = document.createElement("button");
-    close.type = "button";
-    close.className = "rpge-bridge-close";
-    close.textContent = "Close ✕";
-    close.setAttribute("aria-label", "Close " + PAGE_TITLES[id]);
-    close.addEventListener("click", () => closeOverlayPage(id));
-    bar.append(t, close);
-    const frame = document.createElement("iframe");
-    frame.id = "rpge-page-frame-" + id;
-    frame.className = "rpge-page-frame";
-    frame.title = PAGE_TITLES[id];
-    root.append(bar, frame);
-    document.body.appendChild(root);
-    return { root, frame, url: PAGE_URLS[id] };
-}
-
-function openOverlayPage(id) {
-    const page = overlayPages[id] || (overlayPages[id] = makeOverlayPage(id));
-    if (!page.frame.getAttribute("src")) page.frame.setAttribute("src", page.url); // lazy load
-    page.root.hidden = false;
-    document.documentElement.classList.add("rpge-bridge-open");
-}
-
-function closeOverlayPage(id) {
-    const page = overlayPages[id];
-    if (!page) return;
-    page.root.hidden = true; // keep the iframe alive
-    document.documentElement.classList.remove("rpge-bridge-open");
-}
-
-function onPageClick(id) { return () => openOverlayPage(id); }
+function onButtonClick() {
 const defaultSettings = {
     enabled: false
 };
@@ -82,22 +34,31 @@ function onCheckboxChange(event) {
 
 function onButtonClick() {
     // Launch the game instead of just reporting status.
+    openGame();
+}
+
+// Deep-link into the game app (postMessage; the app handles landing-vs-chat re-entry):
+//   "imports"          → the "Import from Loreweaver" landing page
+//   "settings/aimodel" → Settings popup on the AI Model section (the old bridge page)
+function openGame(target) {
     const app = window.rpgEngine;
-    if (app && typeof app.open === "function") {
-        toastr.info("Opening the RPG Engine…", "RPG Engine");
-        app.open();
-    } else {
+    if (!app || typeof app.open !== "function") {
         toastr.error("The game app did not load — see the browser console.", "RPG Engine");
         console.error(`[${extensionName}] window.rpgEngine is missing; the port wrapper failed to load.`);
+        return;
     }
+    if (!target) { app.open(); return; }
+    app.open(target);
 }
 
 function onBridgeClick() {
-    openOverlayPage("bridge");
+    toastr.info("Opening the RPG Engine — AI Model settings…", "RPG Engine");
+    openGame("settings/aimodel");
 }
 
 function onImportClick() {
-    openOverlayPage("imports");
+    toastr.info("Opening the RPG Engine — Import page…", "RPG Engine");
+    openGame("imports");
 }
 
 // Extension initialization
@@ -116,14 +77,6 @@ jQuery(async () => {
         $("#rpg_engine_button").on("click", onButtonClick);
         $("#rpg_engine_bridge").on("click", onBridgeClick);
         $("#rpg_engine_import").on("click", onImportClick);
-        // Escape closes any open page overlay (the game overlay has its own Close button).
-        document.addEventListener("keydown", (e) => {
-            if (e.key !== "Escape") return;
-            for (const id of Object.keys(overlayPages)) {
-                const p = overlayPages[id];
-                if (p && p.root && !p.root.hidden) { closeOverlayPage(id); break; }
-            }
-        });
         loadSettings();
 
         // Load the game wrapper (overlay + ⚔ launcher + wand-menu entry).

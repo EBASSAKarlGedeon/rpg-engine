@@ -1,17 +1,23 @@
+// [rpge-patch 018] Loreweaver-native text AI. This module used to host five text
+// providers (Perchance AI + four BYOK endpoints) with a Perchance fallback behind
+// every route toggle; that whole layer is gone. Text AI now has ONE path: the
+// Loreweaver bridge (app/shims/loreweaver-bridge.js), which maps every
+// chat-completions call onto a Connection Manager profile — endpoint, model and
+// API key resolved SERVER-side. Loreweaver is where AI model config is made; the
+// game only picks profiles. See PATCHES.md [rpge-patch 018].
 import { switchEl } from "./search-bar.js";
 import { infoTipLabelHtml } from "./info-tip.js";
 
 const CFG_KEY = "mno.aiProvider";
-const KEY_KEY = "mno.aiProviderKey";
-const perchanceGenText = window.genText;
-window.__perchanceGenText = window.__perchanceGenText || perchanceGenText;
+const KEY_KEY = "mno.aiProviderKey"; // shared with the image providers (Settings → Image Gen BYOK)
+// The Perchance root generateText, captured at module load (boot.js sets window.genText
+// before main.js replaces it with routedGenText). Kept ONLY for the token-counter meta
+// probe: context-budget.js and ctx-meter.js call genText({ getMetaObject: true }) to reach
+// the plugin's tokenizer, and the app's own counter rides the same object.
+const rootGenText = window.genText;
 
 const PROVIDERS = [
-  { id: "perchance", label: "Perchance AI" },
-  { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-  { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
-  { id: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "openrouter/auto" },
-  { id: "ollama", label: "Ollama (local)", baseUrl: "http://localhost:11434/v1", model: "llama3.1", noKey: true }
+  { id: "loreweaver", label: "Loreweaver", baseUrl: location.origin + "/v1", model: "loreweaver", noKey: true }
 ];
 
 function getProvider(id) {
@@ -21,24 +27,18 @@ function getProvider(id) {
 function readStore() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem(CFG_KEY) || "{}") || {}; } catch (e) {}
-  const ids = PROVIDERS.map((p) => p.id);
-  const provider = ids.includes(s.provider) ? s.provider : "perchance";
-  const saved = s.providers && typeof s.providers === "object" ? s.providers : {};
-  const legacyBase = typeof s.baseUrl === "string" ? s.baseUrl.trim().replace(/\/+$/, "") : "";
-  const legacyModel = typeof s.model === "string" ? s.model.trim() : "";
-  const providers = {};
-  for (const p of PROVIDERS) {
-    if (p.id === "perchance") continue;
-    const e = saved[p.id] && typeof saved[p.id] === "object" ? saved[p.id] : {};
-    const eb = typeof e.baseUrl === "string" ? e.baseUrl.trim().replace(/\/+$/, "") : "";
-    const em = typeof e.model === "string" ? e.model.trim() : "";
-    providers[p.id] = {
-      baseUrl: eb || (p.id === provider && legacyBase) || p.baseUrl,
-      model: em || (p.id === provider && legacyModel) || p.model
-    };
-    providers[p.id].sampling = sanitizeSampling(e.sampling, p.id);
-  }
-  return { provider, allowReasoning: s.allowReasoning === true, thinkingBudget: sanitizeBudget(s.thinkingBudget), customParams: s.customParams === true, useExternal: sanitizeUseExternal(s.useExternal), providers };
+  // Old stores (any provider) collapse to loreweaver — the only provider now.
+  return {
+    provider: "loreweaver",
+    profileName: typeof s.profileName === "string" ? s.profileName : "",
+    allowReasoning: s.allowReasoning === true,
+    thinkingBudget: sanitizeBudget(s.thinkingBudget),
+    useExternal: sanitizeUseExternal(s.useExternal)
+  };
+}
+
+function writeStore(store) {
+  try { localStorage.setItem(CFG_KEY, JSON.stringify(store)); } catch (e) {}
 }
 
 function sanitizeBudget(v) {
@@ -47,10 +47,10 @@ function sanitizeBudget(v) {
   return Math.min(128000, Math.max(1, n));
 }
 
-// Per-call routing: which jobs may use the external provider. Every text-AI
-// call carries a `route` id (see AI_ROUTE_IDS); the Settings → AI Model
-// toggles decide per route, and anything switched off falls back to Perchance
-// AI for that call. Unknown/missing routes ride "other".
+// Per-call routing: which jobs may ride the bridge at all. Every text-AI call
+// carries a `route` id (see AI_ROUTE_IDS); the Settings → AI Model toggles decide
+// per route, and a job switched off DOESN'T RUN (there is no fallback provider
+// anymore). Unknown/missing routes ride "other".
 export const AI_ROUTE_IDS = ["gm", "check", "staging", "tracker", "npc", "scene", "memory", "npclife", "other"];
 export const AI_ROUTE_LABELS = {
   gm: "GM",
@@ -82,67 +82,7 @@ function sanitizeUseExternal(v) {
   return out;
 }
 
-// Sampling sliders (Settings → AI Model → Advanced). Stored on every custom
-// provider's entry; Perchance AI has none. Defaults match each provider's own
-// API defaults, so untouched sliders behave exactly like before.
-const SAMP_LIMITS = {
-  temperature: [0, 2],
-  top_p: [0, 1],
-  top_k: [0, 100],
-  repeatPenalty: [1, 2]
-};
-
-function sampDefaultsFor(pid) {
-  if (pid === "ollama") return { temperature: 0.8, top_p: 0.9, top_k: 40, repeatPenalty: 1.1 };
-  return { temperature: 1, top_p: 1, top_k: 0, repeatPenalty: 1 };
-}
-
-function sanitizeSampNum(v, key, pid) {
-  const n = parseFloat(v);
-  if (!Number.isFinite(n)) return sampDefaultsFor(pid)[key];
-  const [lo, hi] = SAMP_LIMITS[key];
-  const c = Math.min(hi, Math.max(lo, n));
-  return key === "top_k" ? Math.round(c) : Math.round(c * 100) / 100;
-}
-
-function sanitizeSampling(s, pid) {
-  const o = s && typeof s === "object" ? s : {};
-  return {
-    temperature: sanitizeSampNum(o.temperature, "temperature", pid),
-    top_p: sanitizeSampNum(o.top_p, "top_p", pid),
-    top_k: sanitizeSampNum(o.top_k, "top_k", pid),
-    repeatPenalty: sanitizeSampNum(o.repeatPenalty, "repeatPenalty", pid)
-  };
-}
-
-// Extra chat-completions body fields for `provider`'s sampling sliders. Only
-// sends params the provider accepts (OpenAI/DeepSeek reject unknown fields):
-// temperature/top-p go everywhere; top-k only to Ollama + OpenRouter;
-// repeat penalty is native repetition_penalty on Ollama/OpenRouter and maps to
-// frequency_penalty (minus one) on OpenAI/DeepSeek. Untouched sliders equal
-// each API's own defaults, so nothing changes until the user moves one.
-export function samplingParams(provider, sampling) {
-  const s = sanitizeSampling(sampling, provider);
-  const b = { temperature: s.temperature, top_p: s.top_p };
-  if (provider === "ollama") {
-    b.options = {
-      temperature: s.temperature,
-      top_p: s.top_p,
-      top_k: s.top_k,
-      repeat_penalty: s.repeatPenalty
-    };
-  } else if (provider === "openrouter") {
-    if (s.top_k > 0) b.top_k = s.top_k;
-    if (s.repeatPenalty !== 1) b.repetition_penalty = s.repeatPenalty;
-  } else if (provider === "openai" || provider === "deepseek") {
-    if (s.repeatPenalty !== 1) b.frequency_penalty = Math.round((s.repeatPenalty - 1) * 100) / 100;
-  }
-  return b;
-}
-
-function writeStore(store) {
-  try { localStorage.setItem(CFG_KEY, JSON.stringify(store)); } catch (e) {}
-}
+// ---- shared per-provider API keys (IMAGE providers only since patch 018) ----
 
 function readKeys() {
   let raw = "";
@@ -151,13 +91,12 @@ function readKeys() {
     try {
       const j = JSON.parse(raw) || {};
       const out = {};
-      for (const p of PROVIDERS) {
-        if (p.id !== "perchance" && typeof j[p.id] === "string" && j[p.id]) out[p.id] = j[p.id];
+      for (const k of Object.keys(j)) {
+        if (typeof j[k] === "string" && j[k]) out[k] = j[k];
       }
       return out;
     } catch (e) {}
   }
-  if (raw && readStore().provider === "openai") return { openai: raw };
   return {};
 }
 
@@ -169,34 +108,12 @@ function writeKeys(map) {
   } catch (e) {}
 }
 
-export function getAiConfig() {
-  const store = readStore();
-  const preset = getProvider(store.provider);
-  const entry = store.providers[store.provider] || {};
-  const cfg = {
-    provider: store.provider,
-    baseUrl: entry.baseUrl || preset.baseUrl || "",
-    model: entry.model || preset.model || "",
-    allowReasoning: store.allowReasoning,
-    thinkingBudget: store.thinkingBudget,
-    customParams: store.customParams === true,
-    useExternal: sanitizeUseExternal(store.useExternal)
-  };
-  if (store.provider === "ollama") cfg.sampling = sanitizeSampling(entry.sampling, "ollama");
-  else if (store.provider !== "perchance") cfg.sampling = sanitizeSampling(entry.sampling, store.provider);
-  return cfg;
-}
-
-export function getAiKey() {
-  return readKeys()[readStore().provider] || "";
-}
-
 export function getAiKeyFor(id) {
   return readKeys()[id] || "";
 }
 
 // Shared-key writer for the image provider (Settings → Image Gen keeps its own
-// model/baseUrl store but the same per-provider key map, so one key serves both).
+// model/baseUrl store but the same key map, so one key serves both).
 export function setAiKeyFor(id, key) {
   const keys = readKeys();
   if (key) keys[id] = key;
@@ -204,91 +121,59 @@ export function setAiKeyFor(id, key) {
   writeKeys(keys);
 }
 
-export function getProviderEntry(id) {
+// ---- config ---------------------------------------------------------------
+
+export function getAiConfig() {
   const store = readStore();
-  const preset = getProvider(id);
-  const entry = store.providers[id] || {};
-  const out = {
-    baseUrl: entry.baseUrl || preset.baseUrl || "",
-    model: entry.model || preset.model || "",
-    hasKey: !!readKeys()[id],
-    noKey: !!preset.noKey
+  const preset = getProvider("loreweaver");
+  return {
+    provider: "loreweaver",
+    baseUrl: preset.baseUrl,
+    model: preset.model,
+    profileName: store.profileName,
+    useExternal: sanitizeUseExternal(store.useExternal)
   };
-  if (id === "ollama") out.sampling = sanitizeSampling(entry.sampling, "ollama");
-  else if (id !== "perchance") out.sampling = sanitizeSampling(entry.sampling, id);
-  return out;
 }
 
-export function saveAiConfig(cfg, key) {
+export function saveAiConfig(cfg) {
   const store = readStore();
-  const ids = PROVIDERS.map((p) => p.id);
-  const provider = cfg.provider === undefined ? store.provider : (ids.includes(cfg.provider) ? cfg.provider : "perchance");
-  store.provider = provider;
-  store.allowReasoning = !!cfg.allowReasoning;
-  if (cfg.useExternal !== undefined) store.useExternal = sanitizeUseExternal(Object.assign({}, store.useExternal, cfg.useExternal));
-  if (cfg.customParams !== undefined) store.customParams = !!cfg.customParams;
-  if (cfg.thinkingBudget !== undefined) store.thinkingBudget = sanitizeBudget(cfg.thinkingBudget);
-  if (provider !== "perchance") {
-    const preset = getProvider(provider);
-    const prev = store.providers[provider] || {};
-    store.providers[provider] = {
-      baseUrl: typeof cfg.baseUrl === "string" && cfg.baseUrl.trim() ? cfg.baseUrl.trim().replace(/\/+$/, "") : prev.baseUrl || preset.baseUrl,
-      model: typeof cfg.model === "string" && cfg.model.trim() ? cfg.model.trim() : prev.model || preset.model
-    };
-    if (provider === "ollama") {
-      store.providers[provider].sampling = sanitizeSampling(cfg.sampling !== undefined ? cfg.sampling : prev.sampling, "ollama");
-    } else {
-      store.providers[provider].sampling = sanitizeSampling(cfg.sampling !== undefined ? cfg.sampling : prev.sampling, provider);
-    }
-  }
+  if (cfg && cfg.profileName !== undefined) store.profileName = String(cfg.profileName || "");
+  if (cfg && cfg.useExternal !== undefined) store.useExternal = sanitizeUseExternal(Object.assign({}, store.useExternal, cfg.useExternal));
   writeStore(store);
-  if (key !== undefined && provider !== "perchance") {
-    const keys = readKeys();
-    if (key) keys[provider] = key;
-    else delete keys[provider];
-    writeKeys(keys);
-  }
   return getAiConfig();
 }
 
 export function aiActiveProvider() {
-  const c = getAiConfig();
-  if (c.provider === "perchance") return "perchance";
-  if (getAiKey()) return c.provider;
-  return getProvider(c.provider).noKey ? c.provider : "perchance";
+  return "loreweaver";
 }
 
-// Cheap bool for engine-side budget switches (roll-up chunking, etc.): false ONLY when an
-// external provider is confidently active (big windows — don't multiply calls). True on
-// Perchance AI and whenever the config can't be read (fail safe: Perchance is the default
-// provider, and its small window is the conservative assumption).
+// Cheap bool for engine-side budget switches (roll-up chunking, etc.). With Perchance
+// gone there IS no small-window provider: every active call rides a real profile, so
+// this is always false (big windows — don't multiply calls). The functions stay
+// exported because memory-system.js and rp-engine.js fail-safe probe them.
 export function isPerchanceAI() {
-  try { return aiActiveProvider() === "perchance"; } catch (e) { return true; }
+  return false;
 }
 
-// Per-route variant of the above: true when THIS route's calls will run on
-// Perchance AI — either because no external provider is active, or because
-// the route's toggle is off. GM trimming, memory/lore caps and tracker output
-// caps read this (not the global), so a route switched back to Perchance gets
-// Perchance-sized budgets even while other routes stay external.
-// [rpge-patch 006] Loreweaver bridge: when the bridge routes the calls to a real model (a
-// Loreweaver connection profile — whose context window the engine can't know), every route is
-// EXTERNAL: without this the engine would keep measuring/fitting against Perchance's 6,976-token
-// input cap and massively under-use real models. The window itself comes from bridgedInputCap().
+export function isPerchanceAIFor(route) {
+  return false;
+}
+
+// Per-route switch: true when THIS route's calls may run (route toggle on). GM
+// trimming, memory/lore caps and tracker output caps read this. A route switched
+// off simply doesn't run — there is no Perchance fallback to budget for.
 export function routeUsesExternal(route) {
   try {
     if (bridgedInputCap() !== null) return true;
     if (!AI_ROUTE_IDS.includes(route)) route = "other";
-    if (aiActiveProvider() === "perchance") return false;
     return getAiConfig().useExternal[route] !== false;
   } catch (e) { return false; }
 }
 
-// [rpge-patch 006] The input-token budget the engine should assume when the Loreweaver bridge
-// routes calls to a real model. Read from the bridge config (`contextTokens`, set on the bridge
-// page — defaults to 16384 there), clamped to a sane range. Returns null whenever the bridge is
-// OFF or unreadable — callers keep their legacy behavior (Perchance cap, or unmeasured full
-// window for engine-native external providers).
+// [rpge-patch 006] The input-token budget the engine should assume for bridged calls.
+// Read from the bridge config (`contextTokens`, set in Settings → AI Model — default
+// 16384), clamped to a sane range. Returns null only when the bridge config is
+// disabled (hand-edited) — callers keep their legacy behavior.
 export function bridgedInputCap() {
   try {
     const c = JSON.parse(localStorage.getItem("rpge.loreweaverBridge") || "null");
@@ -298,32 +183,20 @@ export function bridgedInputCap() {
   } catch (e) { return null; }
 }
 
-export function isPerchanceAIFor(route) {
-  try { return !routeUsesExternal(route); } catch (e) { return true; }
-}
-
-// Close-time gate for the Settings panel (selecting a provider IS using it, so
-// a keyless remote choice is saved immediately and only blocks closing).
-// Returns null when the stored AI config may close, else the details for the
-// blocking popup (see guardProviderClose in main.js).
+// Close-time gate for the Settings panel. Nothing to block anymore: AI Model has no
+// key to forget and no fallback to revert to — a missing profile shows its own
+// empty state and call sites error with a clear message. (The IMAGE side keeps its
+// own blocker in image-provider.js.)
 export function aiCloseBlocker() {
-  const c = getAiConfig();
-  if (c.provider === "perchance") return null;
-  const preset = getProvider(c.provider);
-  if (preset.noKey) return null;
-  if (getAiKey()) return null;
-  return {
-    section: "AI Model",
-    label: preset.label,
-    message: "Enter an API key for " + preset.label + " (Settings → AI Model), or switch back to Perchance AI."
-  };
+  return null;
 }
 
 export function aiModelLabel() {
-  const c = getAiConfig();
-  const active = aiActiveProvider();
-  return active === "perchance" ? "Perchance AI" : getProvider(active).label + " · " + c.model;
+  const store = readStore();
+  return "Loreweaver · " + (store.profileName || "no profile yet");
 }
+
+// ---- the call path --------------------------------------------------------
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -362,32 +235,22 @@ async function instructionToContent(instruction) {
   return content;
 }
 
-// Cap the completion length from the call's `maxTokens` (see call table in the
-// README). The plugin reads the same option, so behaviour matches Perchance AI.
+// Cap the completion length from the call's `maxTokens` (see call table in the README).
 function maxTokensFor(norm) {
   const n = parseInt(norm && norm.maxTokens, 10);
   if (!Number.isFinite(n)) return 0;
   return Math.min(128000, Math.max(1, n));
 }
 
-function openaiGenText(norm, route) {
-  const cfg = getAiConfig();
-  const preset = getProvider(cfg.provider);
-  const key = getAiKey();
-  // [rpge-patch 015] When the Loreweaver bridge is enabled the server applies the real API
-  // key (the page never needs one) — don't gate bridged calls on a page-stored key.
-  const bridgeOn = (() => { try { return !!(window.LoreweaverBridge && window.LoreweaverBridge.isEnabled()); } catch (e) { return false; } })();
-  if (!key && !preset.noKey && !bridgeOn) throw new Error("No API key saved for " + preset.label + ".");
+// The one text path: POST to `<origin>/v1/chat/completions`, which the bridge shim
+// (window.fetch wrapper) rewrites to the Loreweaver server with the chosen profile.
+// The API key never touches the page. Streaming SSE comes back unchanged from the
+// server, so this parser is the shim-era one, minus the BYOK branches.
+function bridgeGenText(norm, route) {
   const headers = { "Content-Type": "application/json" };
-  if (key) headers.Authorization = "Bearer " + key;
-  else if (preset.noKey) headers.Authorization = "Bearer ollama";
-  // [rpge-patch 001] carry the call's job id on the request so the Loreweaver bridge
-  // shim can route per job (see PATCHES.md). Ignored by every real provider.
+  // [rpge-patch 001] carry the call's job id on the request so the bridge shim can
+  // route per job (main profile for unmapped roles).
   headers["X-RPGE-Route"] = AI_ROUTE_IDS.includes(route) ? route : "other";
-  if (cfg.provider === "openrouter") {
-    headers["HTTP-Referer"] = location.origin;
-    headers["X-Title"] = "MNO RPG ENGINE";
-  }
   const ctrl = new AbortController();
   let activeReader = null;
   const startWith = typeof norm.startWith === "string" ? norm.startWith : "";
@@ -413,31 +276,12 @@ function openaiGenText(norm, route) {
     const userContent = await instructionToContent(norm.instruction);
     const messages = [{ role: "user", content: userContent }];
     if (startWith) messages.push({ role: "assistant", content: startWith });
-    const body = { model: cfg.model, messages, stream: true };
+    const body = { model: "loreweaver", messages, stream: true };
     const cap = maxTokensFor(norm);
     if (cap > 0) body.max_tokens = cap;
     if (Array.isArray(norm.stopSequences) && norm.stopSequences.length) body.stop = norm.stopSequences.slice(0, 4);
     else if (typeof norm.stopSequences === "string" && norm.stopSequences) body.stop = [norm.stopSequences];
-    if (cfg.provider === "openrouter") {
-      if (cfg.allowReasoning) body.reasoning = { max_tokens: cfg.thinkingBudget, exclude: true };
-      else body.reasoning = { enabled: false, exclude: true };
-    }
-    if (cfg.provider === "ollama" && !cfg.allowReasoning) {
-      // Thinking models (qwen3, deepseek-r1, gpt-oss, ...) think by default and
-      // stream the thinking as content. Disable it: `think` is the native
-      // Ollama flag (works on /v1/chat/completions even though current docs
-      // only list it for /v1/responses), `reasoning_effort` / `reasoning.effort`
-      // is the documented OpenAI-compat way ("none" -> think off).
-      // Send all three for max compat across Ollama versions.
-      body.think = false;
-      body.reasoning_effort = "none";
-      body.reasoning = { effort: "none" };
-    }
-    // Sampling sliders (Settings → AI Model → Advanced): per-provider params, see
-    // samplingParams(). Only sent when Custom parameters is on — otherwise the
-    // provider's own defaults apply untouched.
-    if (cfg.provider !== "perchance" && cfg.customParams === true) Object.assign(body, samplingParams(cfg.provider, cfg.sampling));
-    const post = (b) => fetch(cfg.baseUrl + "/chat/completions", {
+    const post = (b) => fetch(getProvider("loreweaver").baseUrl + "/chat/completions", {
       method: "POST",
       headers,
       body: JSON.stringify(b),
@@ -448,17 +292,8 @@ function openaiGenText(norm, route) {
       res = await post(body);
     } catch (e) {
       if (e && e.name === "AbortError") return finishData();
-      let hint = e.message || e;
-      if (/localhost|127\.0\.0\.1/.test(cfg.baseUrl)) hint += " (Ollama: is it running, does OLLAMA_ORIGINS allow this page, and is mixed http/https content blocked?)";
-      throw new Error("Could not reach the API endpoint: " + hint);
-    }
-    if (!res.ok && res.status === 400 && (body.reasoning || body.think !== undefined || body.reasoning_effort)) {
-      const b2 = Object.assign({}, body);
-      delete b2.reasoning;
-      delete b2.think;
-      delete b2.reasoning_effort;
-      const r2 = await post(b2).catch(() => null);
-      if (r2) res = r2;
+      throw new Error("Could not reach the Loreweaver bridge: " + (e.message || e) +
+        " — is the Loreweaver server running, and is a connection profile chosen (Settings → AI Model)?");
     }
     const ctype = res.headers.get("content-type") || "";
     if (ctype.includes("application/json")) {
@@ -523,7 +358,8 @@ function openaiGenText(norm, route) {
         const j = await res.json();
         if (j && j.error && j.error.message) detail = j.error.message;
       } catch (e) {}
-      throw new Error("API error: " + detail);
+      if (res.status === 404) detail += " — the bridge only works when the app is served by the Loreweaver server.";
+      throw new Error("Loreweaver bridge error: " + detail);
     }
     const out = finishData();
     if (norm.onFinish) {
@@ -540,13 +376,14 @@ function openaiGenText(norm, route) {
 }
 
 export function routedGenText(inputData, extraOpts) {
+  // Token-counter meta probe (context-budget.js / ctx-meter.js): delegate to the
+  // engine-native root's meta object — nothing rides the bridge for counting.
   if (inputData && typeof inputData === "object" && inputData.getMetaObject === true) {
-    return perchanceGenText(inputData, extraOpts);
+    return rootGenText(inputData, extraOpts);
   }
-  // Per-route toggle: a call switched off bypasses the external provider and
-  // runs on Perchance AI. The `route` id rides on the call object (or
-  // extraOpts for string calls) and is stripped before delegating, so neither
-  // backend ever sees it. Unmarked calls ride "other".
+  // Per-route toggle: a call switched off doesn't run — there is no fallback
+  // provider. Callers already catch per-job failures (trackers, memory, checks
+  // log and skip; the GM turn shows the failure toast).
   let route = "other";
   if (extraOpts && typeof extraOpts === "object" && typeof extraOpts.route === "string") route = extraOpts.route;
   const plainObj = inputData && typeof inputData === "object" && !Array.isArray(inputData) && !(inputData instanceof String);
@@ -555,30 +392,19 @@ export function routedGenText(inputData, extraOpts) {
   let cleanInput = inputData, cleanExtra = extraOpts;
   if (plainObj && ("route" in inputData)) { cleanInput = Object.assign({}, inputData); delete cleanInput.route; }
   if (extraOpts && typeof extraOpts === "object" && ("route" in extraOpts)) { cleanExtra = Object.assign({}, extraOpts); delete cleanExtra.route; }
-  if (!routeUsesExternal(route)) return perchanceGenText(cleanInput, cleanExtra);
-  // [rpge-patch 001] pass the job id through so openaiGenText can tag the request.
-  return openaiGenText(normalizeInput(cleanInput, cleanExtra), route);
+  if (!routeUsesExternal(route)) {
+    throw new Error((AI_ROUTE_LABELS[route] || route) + " is switched off (Settings → AI Model → External AI calls), so this job did not run.");
+  }
+  return bridgeGenText(normalizeInput(cleanInput, cleanExtra), route);
 }
 
-export async function testAiConnection(baseUrl, model, key, provider, sampling) {
-  const headers = { "Content-Type": "application/json" };
-  if (key) headers.Authorization = "Bearer " + key;
-  else if (getProvider(provider).noKey) headers.Authorization = "Bearer ollama";
-  if (provider === "openrouter") {
-    headers["HTTP-Referer"] = location.origin;
-    headers["X-Title"] = "MNO RPG ENGINE";
-  }
-  const testBody = { model, messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5, stream: false };
-  if (provider === "ollama") {
-    testBody.think = false;
-    testBody.reasoning_effort = "none";
-    testBody.reasoning = { effort: "none" };
-  }
-  if (provider !== "perchance" && sampling !== undefined) Object.assign(testBody, samplingParams(provider, sampling));
-  const res = await fetch(String(baseUrl || "").replace(/\/+$/, "") + "/chat/completions", {
+// One real turn through the bridge with the MAIN profile — the AI Model section's
+// Test call. Same URL shape as a real call, so the shim rewrites it identically.
+export async function testBridgeConnection() {
+  const res = await fetch(getProvider("loreweaver").baseUrl + "/chat/completions", {
     method: "POST",
-    headers,
-    body: JSON.stringify(testBody)
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "loreweaver", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5, stream: false })
   });
   if (!res.ok) {
     let detail = res.status + " " + res.statusText;
@@ -586,6 +412,7 @@ export async function testAiConnection(baseUrl, model, key, provider, sampling) 
       const j = await res.json();
       if (j && j.error && j.error.message) detail = j.error.message;
     } catch (e) {}
+    if (res.status === 404) detail += " — the bridge only works when the app is served by the Loreweaver server.";
     throw new Error(detail);
   }
   const j = await res.json();
@@ -593,132 +420,77 @@ export async function testAiConnection(baseUrl, model, key, provider, sampling) 
   return txt || "OK";
 }
 
+// ---- Settings → AI Model section ------------------------------------------
+
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 export function aiModelSection() {
   const sec = document.createElement("section");
   sec.className = "pf-sec";
-  const cfg = getAiConfig();
   sec.innerHTML = `
     <style>
-      input[type="range"].mno-range { -webkit-appearance: none; appearance: none; flex: 1; min-width: 0; background: transparent; border: none; height: 18px; padding: 0; margin: 0; cursor: pointer; }
-      input[type="range"].mno-range::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: #2A2520; border: 1px solid #00000055; }
-      input[type="range"].mno-range::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -5px; border-radius: 50%; background: #8B9A6E; border: 1px solid #00000088; box-shadow: 0 1px 4px rgba(0,0,0,.6); cursor: pointer; }
-      input[type="range"].mno-range:hover::-webkit-slider-thumb { filter: brightness(1.2); }
-      input[type="range"].mno-range:active::-webkit-slider-thumb { filter: brightness(1.3); }
-      input[type="range"].mno-range:focus-visible { outline: 1px solid #8B9A6E; outline-offset: 4px; }
-      input[type="range"].mno-range::-moz-range-track { height: 6px; border-radius: 3px; background: #2A2520; border: 1px solid #00000055; }
-      input[type="range"].mno-range::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #8B9A6E; border: 1px solid #00000088; box-shadow: 0 1px 4px rgba(0,0,0,.6); cursor: pointer; }
-      input[type="range"].mno-range:hover::-moz-range-thumb { filter: brightness(1.2); }
-      .pf-samp-val { color: var(--accent); font-variant-numeric: tabular-nums; }
-      .pf-ai-sampoff { opacity: .45; }
-      .pf-ai-sampoff input, .pf-ai-sampoff button { pointer-events: none; }
+      .pf-lw-profrow { flex-wrap: nowrap; align-items: center; }
+      .pf-lw-profrow select { max-width: 260px; flex: 1; min-width: 0; }
+      .pf-lw-refresh { flex: none; }
+      .pf-lw-profinfo { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+      .pf-lw-rolebox .pf-row { align-items: center; }
+      .pf-lw-rolebox .pf-row select { max-width: 220px; }
       .pf-ai-saved.is-warn { color: var(--warn); }
       .pf-ai-routelist .pf-ai-routerow + .pf-ai-routerow { margin-top: 12px; }
       .pf-ai-routeall { border-bottom: 1px solid var(--border); padding-bottom: 12px; }
       .pf-ai-routes > .pf-hint { margin-bottom: 14px; }
-      .pf-ai-provrow.nosep { border-bottom: none; padding-bottom: 0; }
-      .pf-keyrow { flex-wrap: nowrap; align-items: stretch; }
-      .pf-keyrow .mini { align-self: stretch; display: inline-flex; align-items: center; justify-content: center; }
     </style>
     <h3 class="pf-sec-title">AI Model</h3>
-    <p class="pf-hint">Choose AI model provider. The Perchance AI model just works. It's free but has a small, limited context window.</p>
-    <div class="pf-kv pf-ai-provrow"><span class="pf-k">Provider</span><select class="popup-in pf-ai-prov" style="max-width:240px"></select></div>    <div class="pf-hint pf-ai-ollama" hidden>Ollama is a local model on your own machine: <a href="https://ollama.com" target="_blank" rel="noopener">https://ollama.com</a><br>Use <b>ngrok</b> or <b>cloudflare tunnel</b> to serve https.</div>
-    <div class="pf-ai-remote" hidden>
-      <div class="pf-kv"><span class="pf-k">Base URL</span></div>
-      <input class="popup-in pf-ai-base" autocomplete="off" spellcheck="false">
-      <div class="pf-ai-keybox">
-      <div class="pf-kv"><span class="pf-k">API key</span></div>
-      <div class="pf-row pf-keyrow"><input class="popup-in pf-ai-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" style="flex:1"><button class="mini pf-ai-show" type="button">Show</button><button class="mini pf-ai-clear" type="button" title="Delete the saved key for this provider">Clear</button></div>
-      <div class="pf-warn pf-ai-keywarn">⚠️ Your key is kept only in this browser and is sent only to your endpoint. Never paste it anywhere public.</div>
-      <div class="pf-info pf-ai-sharedkey" hidden>🔑 Shared key with Image Gen.</div>
-      </div>
-      <div class="pf-kv"><span class="pf-k">Model</span></div>
-      <input class="popup-in pf-ai-model" autocomplete="off" spellcheck="false">
-      <details class="foldbox pf-ai-routes" open hidden>
-      <summary>External AI calls</summary>
-      <p class="pf-hint">Each job below can use the provider above — or fall back to Perchance AI when switched off. Off is useful when the external model is worse at a job, or to save credits.</p>
-      <div class="pf-ai-routelist"></div>
-      </details>
-      <details class="foldbox pf-ai-adv">
-      <summary>Advanced settings</summary>
-      <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">Thinking</span><span class="pf-v pf-ai-think"></span></div>
-      <p class="pf-hint">Slower and costs extra tokens — recommended: off.</p>
-      <div class="pf-ai-budgetwrap">
-      <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">Thinking budget</span><span class="pf-v"><input class="popup-in pf-ai-thinkbudget" type="number" min="1" max="128000" step="1" style="max-width:110px"></span></div>
-      <p class="pf-hint">Max thinking tokens per call when Thinking is on (OpenRouter only).</p>
-      </div>
-      <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">Custom parameters</span><span class="pf-v pf-ai-custom"></span></div>
-      <p class="pf-hint">When on, the sampling sliders below are sent with every request. When off, each provider uses its own defaults and the sliders do nothing.</p>
-      <div class="pf-ai-sampwrap" hidden>
-      <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">Temperature</span><span class="pf-v"><b class="pf-samp-val pf-ai-tempval"></b></span></div>
-      <div class="pf-slider-wrap"><span class="pf-slider-min">0</span><input type="range" class="mno-range pf-ai-temp" min="0" max="2" step="0.01"><span class="pf-slider-max">2</span></div>
-      <p class="pf-hint">How random the writing is. Lower is focused and consistent, higher is wilder and more creative.</p>
-      <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">Top-p</span><span class="pf-v"><b class="pf-samp-val pf-ai-toppval"></b></span></div>
-      <div class="pf-slider-wrap"><span class="pf-slider-min">0</span><input type="range" class="mno-range pf-ai-topp" min="0" max="1" step="0.01"><span class="pf-slider-max">1</span></div>
-      <p class="pf-hint">Only the most likely next words adding up to this probability are picked from. Lower is safer, 1 is off.</p>
-      <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">Top-k</span><span class="pf-v"><b class="pf-samp-val pf-ai-topkval"></b></span></div>
-      <div class="pf-slider-wrap"><span class="pf-slider-min">0</span><input type="range" class="mno-range pf-ai-topk" min="0" max="100" step="1"><span class="pf-slider-max">100</span></div>
-      <p class="pf-hint">Only the this many most likely next words are picked from. Lower is safer, 0 is off. Ollama and OpenRouter only.</p>
-      <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">Repeat penalty</span><span class="pf-v"><b class="pf-samp-val pf-ai-reppval"></b></span></div>
-      <div class="pf-slider-wrap"><span class="pf-slider-min">1</span><input type="range" class="mno-range pf-ai-repp" min="1" max="2" step="0.01"><span class="pf-slider-max">2</span></div>
-      <p class="pf-hint">How much the model avoids repeating itself. Higher repeats less but can wander. Sent as repetition penalty (Ollama, OpenRouter) or frequency penalty (OpenAI, DeepSeek).</p>
-      <p class="pf-hint">Defaults match each provider's own API settings — Reset restores them.</p>
-      <div class="pf-row"><button class="mini pf-ai-sampreset" type="button">Reset sampling to defaults</button></div>
-      </div>
-      </details>
-      <div class="pf-row" style="border-top:1px solid var(--border);padding-top:9px"><button class="btn pf-ai-test" type="button">Test connection</button><span class="pf-note pf-ai-status"></span></div>
-    </div>
+    <p class="pf-hint">Every AI call rides the Loreweaver server through one of your
+    <b>Connection Manager profiles</b> — the same connections the chat uses. Endpoint,
+    model and API key are resolved server-side; nothing is stored in this browser.</p>
+    <p class="hint pf-hint pf-lw-empty" hidden>⚠️ No connection profiles found. Create one in
+    Loreweaver: <b>Extensions → Connection Manager</b> (a profile needs an API endpoint and
+    model), then press ↻ here.</p>
+    <p class="hint pf-hint pf-lw-error" hidden></p>
+    <div class="pf-kv pf-lw-profrow"><span class="pf-k">Main profile</span><select class="popup-in pf-lw-profile"></select><button class="mini pf-lw-refresh" type="button" title="Reload the profile list from Loreweaver">↻</button></div>
+    <div class="pf-lw-profinfo"></div>
+    <details class="foldbox pf-lw-rolebox">
+    <summary>Per-job profiles (optional)</summary>
+    <p class="pf-hint">Leave a job on <b>(main profile)</b> to use the main profile above. Assign
+    a different profile to a job to run it on that connection instead — e.g. trackers, checks and
+    memories on a cheap model, the GM on your best one.</p>
+    <div class="pf-lw-rolelist"></div>
+    </details>
+    <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">Profile preset sampling</span><span class="pf-v pf-lw-usepreset"></span></div>
+    <p class="pf-hint">When on, the profile's preset sampling (temperature, top&nbsp;p, penalties…)
+    is applied whenever the game doesn't set its own. Recommended: on.</p>
+    <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">Context budget (tokens)</span><span class="pf-v"><input class="popup-in pf-lw-ctx" type="number" min="2048" max="200000" step="1024" style="max-width:120px"></span></div>
+    <p class="pf-hint">How much of the model's context window the game may use per prompt — roughly
+    your model's window (e.g. 32768, 65536, 131072). The game fills it with as much recent story +
+    lore + memories as fits. Too high for the actual model: the API truncates or errors.</p>
+    <details class="foldbox pf-ai-routes" open>
+    <summary>External AI calls</summary>
+    <p class="pf-hint">Each job below rides the Loreweaver bridge — or, when switched off, DOESN'T
+    RUN AT ALL (there is no free fallback anymore). Off is useful to disable a job entirely.</p>
+    <div class="pf-ai-routelist"></div>
+    </details>
+    <div class="pf-row" style="border-top:1px solid var(--border);padding-top:9px"><button class="btn pf-lw-test" type="button">Test call through bridge</button><span class="pf-note pf-lw-status"></span></div>
     <div class="pf-row"><span class="pf-note pf-ai-saved"></span></div>`;
-  const provEl = sec.querySelector(".pf-ai-prov");
-  const provRowEl = sec.querySelector(".pf-ai-provrow");
-  const remoteBox = sec.querySelector(".pf-ai-remote");
-  const baseEl = sec.querySelector(".pf-ai-base");
-  const keyEl = sec.querySelector(".pf-ai-key");
-  const modelEl = sec.querySelector(".pf-ai-model");
-  const keyBox = sec.querySelector(".pf-ai-keybox");
-  const ollamaHint = sec.querySelector(".pf-ai-ollama");
-  const sharedKeyHint = sec.querySelector(".pf-ai-sharedkey");
-  const budgetWrap = sec.querySelector(".pf-ai-budgetwrap");
-  const statusEl = sec.querySelector(".pf-ai-status");
+  const emptyEl = sec.querySelector(".pf-lw-empty");
+  const errorEl = sec.querySelector(".pf-lw-error");
+  const profEl = sec.querySelector(".pf-lw-profile");
+  const refreshBtn = sec.querySelector(".pf-lw-refresh");
+  const infoEl = sec.querySelector(".pf-lw-profinfo");
+  const roleList = sec.querySelector(".pf-lw-rolelist");
+  const presetBox = sec.querySelector(".pf-lw-usepreset");
+  const ctxEl = sec.querySelector(".pf-lw-ctx");
+  const statusEl = sec.querySelector(".pf-lw-status");
   const savedEl = sec.querySelector(".pf-ai-saved");
-  const thinkBox = sec.querySelector(".pf-ai-think");
-  const customBox = sec.querySelector(".pf-ai-custom");
-  const budgetEl = sec.querySelector(".pf-ai-thinkbudget");
-  const sampWrap = sec.querySelector(".pf-ai-sampwrap");
-  const tempEl = sec.querySelector(".pf-ai-temp");
-  const toppEl = sec.querySelector(".pf-ai-topp");
-  const topkEl = sec.querySelector(".pf-ai-topk");
-  const reppEl = sec.querySelector(".pf-ai-repp");
-  const tempVal = sec.querySelector(".pf-ai-tempval");
-  const toppVal = sec.querySelector(".pf-ai-toppval");
-  const topkVal = sec.querySelector(".pf-ai-topkval");
-  const reppVal = sec.querySelector(".pf-ai-reppval");
-  budgetEl.value = cfg.thinkingBudget;
-  thinkBox.dataset.on = cfg.allowReasoning ? "1" : "";
-  // Titleless switches: each row's pf-hint below it already explains both states,
-  // so there is nothing a tooltip would add (same policy as the Story panel).
-  const swThink = switchEl({
-    on: () => thinkBox.dataset.on === "1",
-    set: (on) => { thinkBox.dataset.on = on ? "1" : ""; },
-    text: cfg.allowReasoning ? "On" : "Off",
-    plain: true,
-    onChange: () => { swThink.setLabel(thinkBox.dataset.on === "1" ? "On" : "Off"); persist(); }
-  });
-  thinkBox.appendChild(swThink.el);
-  customBox.dataset.on = cfg.customParams === true ? "1" : "";
-  const swCustom = switchEl({
-    on: () => customBox.dataset.on === "1",
-    set: (on) => { customBox.dataset.on = on ? "1" : ""; },
-    text: cfg.customParams === true ? "On" : "Off",
-    plain: true,
-    onChange: () => { swCustom.setLabel(customBox.dataset.on === "1" ? "On" : "Off"); paintCustom(); persist(); }
-  });
-  customBox.appendChild(swCustom.el);
-  // Per-job routing switches (global, not per provider): which calls may use
-  // the external provider above. Anything off falls back to Perchance AI.
-  const routesBox = sec.querySelector(".pf-ai-routes");
   const routesList = sec.querySelector(".pf-ai-routelist");
+
+  const B = () => (typeof window !== "undefined" ? window.LoreweaverBridge : null);
+  const readBridge = () => {
+    try { const b = B(); return b ? (b.read() || {}) : {}; } catch (e) { return {}; }
+  };
+
+  // Route switches (see AI_ROUTE_IDS): on = the job rides the bridge; off = skipped.
+  const cfg0 = getAiConfig();
   const routeMounts = {};
   const routeSwitches = {};
   const paintRouteSw = (id) => {
@@ -732,22 +504,19 @@ export function aiModelSection() {
     row.className = "pf-row pf-ai-routerow";
     row.innerHTML = `<span class="pf-k" style="min-width:130px">${infoTipLabelHtml(AI_ROUTE_LABELS[id], AI_ROUTE_HINTS[id])}</span><span class="pf-v pf-ai-routesw"></span>`;
     const mount = row.querySelector(".pf-ai-routesw");
-    mount.dataset.on = (cfg.useExternal && cfg.useExternal[id] !== false) ? "1" : "";
+    mount.dataset.on = (cfg0.useExternal && cfg0.useExternal[id] !== false) ? "1" : "";
     const sw = switchEl({
       on: () => mount.dataset.on === "1",
       set: (on) => { mount.dataset.on = on ? "1" : ""; },
       text: mount.dataset.on === "1" ? "On" : "Off",
       plain: true,
-      onChange: () => { paintRouteSw(id); allSw.paint(); allSw.setLabel(allOn() ? "On" : "Off"); persist(); }
+      onChange: () => { paintRouteSw(id); allSw.paint(); allSw.setLabel(allOn() ? "On" : "Off"); persistRoutes(); }
     });
     mount.appendChild(sw.el);
     routeMounts[id] = mount;
     routeSwitches[id] = sw;
     routesList.appendChild(row);
   }
-  // Master "All" switch, prepended above the per-job rows: flips every job at
-  // once. Its own state is derived (on only when every job is on) and repaints
-  // whenever any single toggle changes.
   const allOn = () => AI_ROUTE_IDS.every((id) => routeMounts[id] && routeMounts[id].dataset.on === "1");
   const allRow = document.createElement("div");
   allRow.className = "pf-row pf-ai-routerow pf-ai-routeall";
@@ -758,147 +527,181 @@ export function aiModelSection() {
     set: (on) => { for (const id of AI_ROUTE_IDS) routeMounts[id].dataset.on = on ? "1" : ""; },
     text: allOn() ? "On" : "Off",
     plain: true,
-    onChange: () => { for (const id of AI_ROUTE_IDS) paintRouteSw(id); allSw.paint(); allSw.setLabel(allOn() ? "On" : "Off"); persist(); }
+    onChange: () => { for (const id of AI_ROUTE_IDS) paintRouteSw(id); allSw.paint(); allSw.setLabel(allOn() ? "On" : "Off"); persistRoutes(); }
   });
   allMount.appendChild(allSw.el);
   routesList.prepend(allRow);
-  const readRoutes = () => {
+  const persistRoutes = () => {
     const out = {};
     for (const id of AI_ROUTE_IDS) out[id] = !routeMounts[id] || routeMounts[id].dataset.on === "1";
-    return out;
+    saveAiConfig({ useExternal: out });
+    try { window.dispatchEvent(new Event("mno:aimodel-changed")); } catch (e) {}
   };
-  for (const p of PROVIDERS) {
-    const o = document.createElement("option");
-    o.value = p.id;
-    o.textContent = p.label;
-    provEl.appendChild(o);
-  }
-  provEl.value = cfg.provider;
-  const loadEntry = (id) => {
-    const entry = getProviderEntry(id);
-    baseEl.value = entry.baseUrl;
-    modelEl.value = entry.model;
-    keyEl.value = "";
-    keyEl.placeholder = entry.hasKey ? "•••••••• (saved)" : "sk-…";
-    const s = sanitizeSampling(entry.sampling, id);
-    tempEl.value = s.temperature; tempVal.textContent = String(s.temperature);
-    toppEl.value = s.top_p; toppVal.textContent = String(s.top_p);
-    topkEl.value = s.top_k; topkVal.textContent = String(s.top_k);
-    reppEl.value = s.repeatPenalty; reppVal.textContent = String(s.repeatPenalty);
+
+  // Bridge params live in rpge.loreweaverBridge (the bridge shim reads them live) —
+  // always `enabled: true`: with profiles-only AI there is no off state anymore.
+  const bridge = readBridge();
+  ctxEl.value = Number.isFinite(Number(bridge.contextTokens)) && Number(bridge.contextTokens) >= 2048 ? Math.round(Number(bridge.contextTokens)) : 16384;
+  const swPreset = switchEl({
+    on: () => bridge.usePreset !== false,
+    set: (on) => { bridge.usePreset = on; },
+    text: bridge.usePreset !== false ? "On" : "Off",
+    plain: true,
+    onChange: () => { swPreset.setLabel(bridge.usePreset !== false ? "On" : "Off"); persistBridge(); }
+  });
+  presetBox.appendChild(swPreset.el);
+  const persistBridge = () => {
+    const b = B();
+    if (!b) return;
+    b.write(Object.assign({}, readBridge(), bridge, { enabled: true }));
+    try { window.dispatchEvent(new Event("mno:aimodel-changed")); } catch (e) {}
   };
-  const readSampling = () => sanitizeSampling({
-    temperature: tempEl.value,
-    top_p: toppEl.value,
-    top_k: topkEl.value,
-    repeatPenalty: reppEl.value
-  }, provEl.value);
-  const paintSampVals = () => {
-    const s = readSampling();
-    tempVal.textContent = String(s.temperature);
-    toppVal.textContent = String(s.top_p);
-    topkVal.textContent = String(s.top_k);
-    reppVal.textContent = String(s.repeatPenalty);
-  };
-  for (const el of [tempEl, toppEl, topkEl, reppEl]) {
-    el.addEventListener("input", () => { paintSampVals(); persist(); });
-  }
-  const paintCustom = () => {
-    sampWrap.classList.toggle("pf-ai-sampoff", customBox.dataset.on !== "1");
-  };
-  sec.querySelector(".pf-ai-sampreset").onclick = () => {
-    const s = sampDefaultsFor(provEl.value);
-    tempEl.value = s.temperature; toppEl.value = s.top_p;
-    topkEl.value = s.top_k; reppEl.value = s.repeatPenalty;
-    paintSampVals();
-    persist();
-  };
-  const paint = () => {
-    const preset = getProvider(provEl.value);
-    const remote = provEl.value !== "perchance";
-    // Perchance AI has no settings of its own — drop the provider row's
-    // separator so it doesn't dangle over an empty section.
-    provRowEl.classList.toggle("nosep", !remote);
-    remoteBox.hidden = !remote;
-    keyBox.hidden = !!preset.noKey;
-    ollamaHint.hidden = !preset.noKey;
-    sharedKeyHint.hidden = !(provEl.value === "openai" || provEl.value === "openrouter");
-    budgetWrap.hidden = provEl.value !== "openrouter";
-    sampWrap.hidden = provEl.value === "perchance";
-    routesBox.hidden = !remote;
-    paintCustom();
-    if (!statusEl.dataset.touched) {
-      const entry = getProviderEntry(provEl.value);
-      statusEl.textContent = remote && !preset.noKey && !entry.hasKey && !keyEl.value.trim() ? "No key saved yet." : "";
+
+  ctxEl.addEventListener("change", () => {
+    const n = parseInt(ctxEl.value, 10);
+    bridge.contextTokens = Number.isFinite(n) ? Math.min(200000, Math.max(2048, n)) : 16384;
+    ctxEl.value = bridge.contextTokens;
+    persistBridge();
+  });
+
+  // Per-job profile selects (the bridge shim's ROLE_IDS, minus "main").
+  const ROLE_IDS = (B() && B().ROLE_IDS) || ["gm", "check", "staging", "tracker", "npc", "scene", "memory", "npclife", "other", "cheap"];
+  const roleMounts = {};
+  const roleSel = {};
+  const paintRoleOptions = () => {
+    for (const id of ROLE_IDS) {
+      const sel = roleSel[id];
+      if (!sel) continue;
+      const cur = (bridge.roles && bridge.roles[id]) || "";
+      sel.innerHTML = "";
+      const main = document.createElement("option");
+      main.value = "";
+      main.textContent = "(main profile)";
+      sel.appendChild(main);
+      for (const p of profList) {
+        const o = document.createElement("option");
+        o.value = p.id;
+        o.textContent = (p.name || p.id) + (p.model ? " — " + p.model : "");
+        sel.appendChild(o);
+      }
+      sel.value = profList.some((p) => p.id === cur) ? cur : "";
     }
   };
-  const refreshUsingLine = (next) => {
-    // The line only exists for the fallback warning — a healthy selection needs
-    // no commentary (the dropdown itself shows what is active).
-    const fallback = next.provider !== "perchance" && !getAiKey() && !getProvider(next.provider).noKey;
-    if (fallback) {
-      savedEl.textContent = "⚠️ Using Perchance AI for now — enter a key to use " + getProvider(next.provider).label + ".";
-    } else {
-      savedEl.textContent = "";
+  for (const id of ROLE_IDS) {
+    const row = document.createElement("div");
+    row.className = "pf-row";
+    row.innerHTML = `<span class="pf-k" style="min-width:130px">${esc(id === "cheap" ? "Cheap secondary model" : (AI_ROUTE_LABELS[id] || id))}</span><select class="popup-in pf-lw-role"></select>`;
+    const sel = row.querySelector("select");
+    sel.addEventListener("change", () => {
+      bridge.roles = bridge.roles && typeof bridge.roles === "object" ? bridge.roles : {};
+      if (sel.value) bridge.roles[id] = sel.value;
+      else delete bridge.roles[id];
+      persistBridge();
+    });
+    roleMounts[id] = row;
+    roleSel[id] = sel;
+    roleList.appendChild(row);
+  }
+
+  let profList = [];
+  const readProfileId = () => {
+    const b = readBridge();
+    return (b.profileId && profList.some((p) => p.id === b.profileId)) ? b.profileId : "";
+  };
+  const paintProfiles = () => {
+    const pid = readProfileId();
+    profEl.innerHTML = "";
+    if (!profList.length) {
+      profEl.innerHTML = "<option value=''>No profiles found</option>";
+      profEl.disabled = true;
+      emptyEl.hidden = false;
+      infoEl.textContent = "";
+      return;
     }
-    savedEl.classList.toggle("is-warn", fallback);
+    profEl.disabled = false;
+    emptyEl.hidden = true;
+    for (const p of profList) {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = (p.name || p.id) + (p.model ? " — " + p.model : "");
+      profEl.appendChild(o);
+    }
+    const effective = profList.some((p) => p.id === pid) ? pid : profList[0].id;
+    profEl.value = effective;
+    paintProfileInfo(effective);
   };
-  // Every control writes straight through: picking the provider IS using it, and
-  // every field/slider/switch persists on input — no Save step. A keyless remote
-  // choice is saved as-is and only blocks closing (see aiCloseBlocker).
-  const persist = () => {
-    const c = { provider: provEl.value, baseUrl: baseEl.value, model: modelEl.value, allowReasoning: thinkBox.dataset.on === "1", thinkingBudget: budgetEl.value, customParams: customBox.dataset.on === "1", useExternal: readRoutes() };
-    if (provEl.value !== "perchance") c.sampling = readSampling();
-    const typedKey = keyEl.value.trim();
-    const next = saveAiConfig(c, typedKey ? typedKey : undefined);
-    refreshUsingLine(next);
+  const paintProfileInfo = (pid) => {
+    const p = profList.find((x) => x.id === pid);
+    if (!p) { infoEl.textContent = ""; return; }
+    infoEl.textContent = [
+      "api: " + (p.api || "?"),
+      "model: " + (p.model || "?"),
+      p["api-url"] ? "url: " + p["api-url"] : ""
+    ].filter(Boolean).join(" · ") + " — key stays on the server.";
+  };
+  profEl.addEventListener("change", () => {
+    const p = profList.find((x) => x.id === profEl.value);
+    bridge.profileId = profEl.value || "";
+    bridge.profileName = p ? (p.name || p.id) : "";
+    persistBridge();
+    saveAiConfig({ profileName: bridge.profileName });
+    paintProfileInfo(profEl.value);
+    paintRoleOptions();
     try { window.dispatchEvent(new Event("mno:aimodel-changed")); } catch (e) {}
-    paint();
+  });
+
+  const loadProfiles = async (force) => {
+    const b = B();
+    if (!b || typeof b.getSettings !== "function") {
+      errorEl.hidden = false;
+      errorEl.textContent = "The Loreweaver bridge shim is not loaded — the app only works when served by Loreweaver.";
+      return;
+    }
+    try {
+      const lw = await b.getSettings();
+      profList = Array.isArray(lw.profiles) ? lw.profiles : [];
+      // First-run default: the profile Loreweaver itself has selected (one less click).
+      const cur = readBridge();
+      if (!cur.profileId && lw.selectedProfile && profList.some((p) => p.id === lw.selectedProfile)) {
+        bridge.profileId = lw.selectedProfile;
+        const p = profList.find((x) => x.id === lw.selectedProfile);
+        bridge.profileName = p ? (p.name || p.id) : "";
+        persistBridge();
+        saveAiConfig({ profileName: bridge.profileName });
+      }
+      errorEl.hidden = true;
+      paintProfiles();
+      paintRoleOptions();
+    } catch (e) {
+      errorEl.hidden = false;
+      errorEl.textContent = "Could not load the connection profiles (" + (e.message || e) +
+        "). The AI Model section only works when the app is served by the Loreweaver server.";
+      profList = [];
+      paintProfiles();
+    }
   };
-  provEl.onchange = () => {
-    loadEntry(provEl.value);
-    statusEl.dataset.touched = "";
-    statusEl.textContent = "";
-    persist();
+  refreshBtn.onclick = async () => {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = "…";
+    try { const b = B(); if (b && typeof b.getSettings === "function") { b.settingsCacheInvalidate ? b.settingsCacheInvalidate() : null; } } catch (e) {}
+    await loadProfiles(true);
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = "↻";
   };
-  for (const el of [baseEl, modelEl]) el.addEventListener("input", persist);
-  keyEl.addEventListener("input", persist);
-  budgetEl.addEventListener("input", persist);
-  budgetEl.addEventListener("change", persist);
-  loadEntry(cfg.provider);
-  paint();
-  refreshUsingLine(getAiConfig());
-  sec.querySelector(".pf-ai-show").onclick = (e) => {
-    const show = keyEl.type === "password";
-    keyEl.type = show ? "text" : "password";
-    e.target.textContent = show ? "Hide" : "Show";
-  };
-  sec.querySelector(".pf-ai-clear").onclick = () => {
-    keyEl.value = "";
-    keyEl.placeholder = "sk-…";
-    statusEl.dataset.touched = "";
-    const c = { provider: provEl.value, baseUrl: baseEl.value, model: modelEl.value, allowReasoning: thinkBox.dataset.on === "1", thinkingBudget: budgetEl.value, customParams: customBox.dataset.on === "1" };
-    if (provEl.value !== "perchance") c.sampling = readSampling();
-    const next = saveAiConfig(c, ""); // "" deletes the stored key for this provider
-    refreshUsingLine(next);
-    try { window.dispatchEvent(new Event("mno:aimodel-changed")); } catch (e) {}
-    paint();
-  };
-  sec.querySelector(".pf-ai-test").onclick = async (e) => {
+
+  sec.querySelector(".pf-lw-test").onclick = async (e) => {
     const btn = e.target;
     btn.disabled = true;
-    statusEl.dataset.touched = "1";
     statusEl.textContent = "Testing…";
     try {
-      const preset = getProvider(provEl.value);
-      const key = keyEl.value.trim() || (getProviderEntry(provEl.value).hasKey ? getAiKeyFor(provEl.value) : "");
-      if (!key && !preset.noKey) throw new Error("Enter an API key first.");
-      const sampling = (provEl.value === "perchance" || customBox.dataset.on !== "1") ? undefined : readSampling();
-      const reply = await testAiConnection(baseEl.value.trim(), modelEl.value.trim(), key, provEl.value, sampling);
+      const reply = await testBridgeConnection();
       statusEl.textContent = "✓ Connected" + (reply ? " — replied: " + reply.slice(0, 40) : "");
     } catch (err) {
       statusEl.textContent = "✖ " + (err.message || err);
     }
     btn.disabled = false;
   };
+
+  loadProfiles();
   return sec;
 }

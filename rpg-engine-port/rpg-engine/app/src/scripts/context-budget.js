@@ -568,7 +568,7 @@ function paintReport(container, rep) {
       ${["opening", "typical", "heavy"].map((m) => rep.scenarios[m] ? `<button type="button" class="mini cb-segb" data-m="${m}">${esc(rep.scenarios[m].label)}</button>` : "").join("")}
     </div>
     <div class="cb-hero" id="cbHero"></div>
-    <div class="cb-note">The budget line is the Perchance ai-text plugin's recommended context window (${rep.ideal.toLocaleString()} tokens) — a target, not a hard limit. Sections are measured from the real prompt this world builds; the transcript window holds the engine's last 10 turns, and outputs use sample replies since the GM call isn't length-capped.</div>
+    <div class="cb-note">The budget line is the configured context budget (Settings → AI Model → Context budget, currently ${rep.ideal.toLocaleString()} tokens) — a target, not a hard limit. Sections are measured from the real prompt this world builds; the transcript window holds the engine's last 10 turns, and outputs use sample replies since the GM call isn't length-capped.</div>
     <div class="ce-sec">Where the GM prompt goes</div>
     <div class="cb-rows" id="cbRows"></div>
     <div class="ce-sec">Every call in a turn <span class="ce-note">input + max output</span></div>

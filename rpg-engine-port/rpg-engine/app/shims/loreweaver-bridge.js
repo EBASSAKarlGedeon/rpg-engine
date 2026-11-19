@@ -245,6 +245,7 @@
   window.LoreweaverBridge = {
     read: readCfg, write: writeCfg, isEnabled, bridgeFetch, BRIDGE_PATH,
     getSettings: getLoreweaverSettings,
+    settingsCacheInvalidate: () => { settingsPromise = null; settingsAt = 0; }, // force the next getSettings() to refetch
     api,
     ROLE_IDS, ROLE_LABELS,
   };

@@ -132,7 +132,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   page.on("pageerror", (e) => problems.push("pageerror: " + e.message.slice(0, 160)));
   page.on("console", (m) => { if (/rpge|import/i.test(m.text())) console.log("[page]", m.text().slice(0, 200)); });
   await page.route("**/*", (r) => (/^http:\/\/127\.0\.0\.1/.test(r.request().url()) ? r.continue() : r.abort()));
-  const url = `http://127.0.0.1:${PORT}/app/loreweaver-import.html`;
+  const url = `http://127.0.0.1:${PORT}/app/index.html#imports`; // [rpge-patch 018] import page lives in the app now
   const heroes = () => page.evaluate(async () => (await window.root.kv.rpg.get("savedHeroes")) || []);
 
   await page.goto(url);
@@ -150,7 +150,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // ---- import the default persona ----
   await page.click(".prow button");
-  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Imported"), { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Imported"), { timeout: 8000 });
   let list = await heroes();
   if (list.length !== 1) problems.push("after import expected 1 hero, got " + list.length);
   const h = list[0];
@@ -168,7 +168,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   });
   await page.waitForFunction(() => /up to date/.test(document.querySelector(".prow .pstatus").textContent), { timeout: 8000 });
   await page.click(".prow button");
-  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Updated"), { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Updated"), { timeout: 8000 });
   list = await heroes();
   if (list.length !== 1) problems.push("re-import duplicated the hero (got " + list.length + ")");
   if (!list[0] || list[0].race !== "stormborn") problems.push("update clobbered a game-side field (race)");
@@ -183,7 +183,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const btnTxt = await page.$eval(".prow button", (b) => b.textContent);
   if (!/Update/.test(btnTxt)) problems.push("button should say Update after change, got: " + btnTxt);
   await page.click(".prow button");
-  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Updated"), { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Updated"), { timeout: 8000 });
   list = await heroes();
   if (!list[0] || list[0].persona !== "Rewritten: now a retired pirate captain.") problems.push("update did not pull the new description");
   if (!list[0] || list[0].race !== "stormborn") problems.push("update clobbered game-side field after source change (race)");
@@ -191,28 +191,61 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   // ---- second persona still importable independently ----
   const btns = await page.$$(".prow button");
   await btns[1].click();
-  await page.waitForFunction(() => document.querySelectorAll(".prow").length === 2 && document.querySelector("#msg").textContent.includes("Imported"), { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelectorAll(".prow").length === 2 && document.querySelector("#lwimpMsg").textContent.includes("Imported"), { timeout: 8000 });
   list = await heroes();
   if (list.length !== 2) problems.push("second import failed (got " + list.length + ")");
   const mira = list.find((x) => x.lwSource && x.lwSource.id === "p2.png");
   if (!mira || mira.name !== "Mira the Quiet") problems.push("second hero wrong: " + JSON.stringify(mira && mira.name));
 
   // ---- character card -> world NPC ----
-  // A game world must exist for the dropdown: seed one in the raw stored file form.
-  await page.evaluate(async () => {
-    await window.root.kv.worlds.set("w1", { meta: { id: "w1", name: "Test World" }, npcs: [], lorebook: [] });
-    const idx = (await window.root.kv.worlds.get("index")) || [];
-    if (!idx.some((w) => w.id === "w1")) { idx.push({ id: "w1", name: "Test World" }); await window.root.kv.worlds.set("index", idx); }
-  });
+  // kv-stub rehydrate race (heavy-sweep lesson): seed, let the app's boot reconcile settle,
+  // re-seed, then reload — otherwise the shim can clobber the freshly written index.
+  // A game world must exist for the dropdown. Full form (the app's boot runs refreshIndex(),
+  // which normalizes every stored world and drops invalid ones — a bare {meta:{id,name}} would
+  // be skipped and the rebuilt index would come back empty).
+  const seedWorld = async () => {
+    await page.evaluate(async () => {
+      const now = new Date().toISOString();
+      await window.root.kv.worlds.set("w1", {
+        format: "mno-world", version: 1,
+        meta: { id: "w1", name: "Test World", description: "", tags: [], nsfw: false, cover: "", createdAt: now, updatedAt: now },
+        npcs: [], lorebook: [], trackers: [], npcTrackers: [],
+      });
+      const idx = (await window.root.kv.worlds.get("index")) || [];
+      if (!idx.some((w) => w.id === "w1")) { idx.push({ id: "w1", name: "Test World", description: "", tags: [], nsfw: false, author: "", authorId: "", remix: null, origin: "", cover: "", createdAt: now, updatedAt: now }); await window.root.kv.worlds.set("index", idx); }
+    });
+  };
+  await seedWorld();
+  await page.waitForTimeout(5000);
+  await seedWorld();
   await page.reload();
-  await page.waitForSelector("#chars .prow", { timeout: 8000 });
-  const selVal = await page.$eval("#targetWorld", (s) => s.value);
+  try {
+    await page.waitForSelector("#lwimpChars .prow", { timeout: 25000 });
+  } catch (e) {
+    // debug dump: what did the reload land on?
+    const dbg = await page.evaluate(() => ({
+      hash: location.hash,
+      lwimp: !!document.querySelector(".lwimp"),
+      sel: (document.querySelector("#lwimpTargetWorld") || {}).value,
+      selHtml: (document.querySelector("#lwimpTargetWorld") || { innerHTML: "" }).innerHTML.slice(0, 200),
+      chars: (document.querySelector("#lwimpChars") || { innerHTML: "" }).innerHTML.slice(0, 200),
+      msg: (document.querySelector("#lwimpMsg") || { textContent: "" }).textContent.slice(0, 160),
+      kvW1: null, kvIndex: null,
+    }));
+    try {
+      dbg.kvW1 = await page.evaluate(async () => JSON.stringify(await window.root.kv.worlds.get("w1")).slice(0, 120));
+      dbg.kvIndex = await page.evaluate(async () => JSON.stringify(await window.root.kv.worlds.get("index")).slice(0, 200));
+    } catch (e2) { dbg.kvErr = String(e2.message || e2); }
+    problems.push("cards did not render after reload: " + JSON.stringify(dbg));
+    console.log("DEBUG DUMP:", JSON.stringify(dbg, null, 1));
+  }
+  const selVal = await page.$eval("#lwimpTargetWorld", (s) => s.value);
   if (selVal !== "w1") problems.push("world dropdown did not select w1: " + selVal);
-  const cardRows = await page.$$eval("#chars .prow", (rs) => rs.map((r) => ({ name: r.querySelector(".pname").textContent, btn: r.querySelector("button").textContent, btns: r.querySelectorAll("button").length })));
+  const cardRows = await page.$$eval("#lwimpChars .prow", (rs) => rs.map((r) => ({ name: r.querySelector(".pname").textContent, btn: r.querySelector("button").textContent, btns: r.querySelectorAll("button").length })));
   if (cardRows.length !== 3 || cardRows[0].name !== "Kael" || !/Add as NPC/.test(cardRows[0].btn)) problems.push("card rows wrong: " + JSON.stringify(cardRows));
   if (cardRows.some((r) => r.btns !== 2)) problems.push("card rows should have 2 buttons (NPC + world): " + JSON.stringify(cardRows));
-  await page.click("#chars .prow button");
-  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Added"), { timeout: 8000 });
+  await page.click("#lwimpChars .prow button");
+  await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Added"), { timeout: 8000 });
   let world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
   if (!world || !Array.isArray(world.npcs) || world.npcs.length !== 1) problems.push("card import: world.npcs wrong");
   const npc = world && world.npcs && world.npcs[0];
@@ -227,16 +260,29 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     w.npcs[0].race = "greyfolk";
     await window.root.kv.worlds.set("w1", w);
   });
-  await page.click("#chars .prow button");
-  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Updated"), { timeout: 8000 });
+  await page.click("#lwimpChars .prow button");
+  await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Updated"), { timeout: 8000 });
   world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
   if (!world || world.npcs.length !== 1) problems.push("card re-import duplicated the NPC");
   if (!world || !world.npcs[0] || world.npcs[0].race !== "greyfolk") problems.push("card update clobbered a game-side field (race)");
 
   // ---- card -> standalone world ("Add as world") ----
   // Rulesville row is the 2nd card row (sorted Kael, Rulesville, Vex); its second button.
-  await page.click("#chars .prow:nth-of-type(3) button.secondary");
-  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Created world"), { timeout: 8000 });
+  try {
+    await page.click("#lwimpChars .prow:nth-of-type(3) button.secondary");
+  } catch (e) {
+    const dbg = await page.evaluate(() => ({
+      rows: [...document.querySelectorAll("#lwimpChars .prow")].map(r => r.querySelector(".pname").textContent),
+      msg: (document.querySelector("#lwimpMsg") || { textContent: "" }).textContent,
+    }));
+    console.log("ADD-AS-WORLD DEBUG:", JSON.stringify(dbg, null, 1));
+    throw e;
+  }
+  await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Created world"), { timeout: 8000 }).catch(async (e) => {
+    const dbg = await page.evaluate(() => ({ msg: (document.querySelector("#lwimpMsg") || { textContent: "" }).textContent, rows: [...document.querySelectorAll("#lwimpChars .prow")].map(r => r.querySelector(".pname").textContent), sel: (document.querySelector("#lwimpTargetWorld") || { value: "?" }).value, selHtml: (document.querySelector("#lwimpTargetWorld") || { innerHTML: "?" }).innerHTML.slice(0, 160) }));
+    console.log("CREATED-WORLD DEBUG:", JSON.stringify(dbg, null, 1));
+    throw e;
+  });
   const rw = await page.evaluate(async () => await window.root.kv.worlds.get("rulesville"));
   if (!rw || rw.format !== "mno-world" || rw.version !== 1) problems.push("card-world: file form wrong: " + JSON.stringify(rw && { format: rw && rw.format, version: rw && rw.version }));
   if (!rw || !rw.meta || rw.meta.name !== "Rulesville" || rw.meta.id !== "rulesville") problems.push("card-world: meta wrong: " + JSON.stringify(rw && rw.meta));
@@ -260,19 +306,19 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   reg = await page.evaluate(async () => await window.root.kv.rpg.get("lwImports"));
   const rwReg = reg && reg.cards && reg.cards["rules.png"];
   if (!rwReg || !rwReg.worlds[0] || rwReg.worlds[0].worldId !== "rulesville" || rwReg.worlds[0].asWorld !== true || JSON.stringify(rwReg.worlds[0].titles) !== JSON.stringify(["Anna", "Town charter"])) problems.push("card-world: registry wrong: " + JSON.stringify(rwReg));
-  const selAfter = await page.$eval("#targetWorld", (s) => s.value);
+  const selAfter = await page.$eval("#lwimpTargetWorld", (s) => s.value);
   if (selAfter !== "rulesville") problems.push("card-world: target world did not switch to the new world: " + selAfter);
 
   // mixed update: with target back on w1, "Add as NPC" adds the NPC there AND refreshes the world import (no dup)
   await page.evaluate(() => localStorage.setItem("rpge.importWorld", "w1"));
   await page.reload();
-  await page.waitForSelector("#chars .prow", { timeout: 8000 });
-  const selBack = await page.$eval("#targetWorld", (s) => s.value);
+  await page.waitForSelector("#lwimpChars .prow", { timeout: 8000 });
+  const selBack = await page.$eval("#lwimpTargetWorld", (s) => s.value);
   if (selBack !== "w1") problems.push("remembered world selection broken: " + selBack);
-  const rvRow = await page.$$eval("#chars .prow", (rs) => rs.findIndex((r) => r.querySelector(".pname").textContent === "Rulesville"));
+  const rvRow = await page.$$eval("#lwimpChars .prow", (rs) => rs.findIndex((r) => r.querySelector(".pname").textContent === "Rulesville"));
   if (rvRow < 0) problems.push("Rulesville row missing after reload");
-  await page.evaluate((i) => { document.querySelectorAll("#chars .prow")[i].querySelector("button").click(); }, rvRow);
-  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Added"), { timeout: 8000 });
+  await page.evaluate((i) => { document.querySelectorAll("#lwimpChars .prow")[i].querySelector("button").click(); }, rvRow);
+  await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Added"), { timeout: 8000 });
   world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
   if (!world || !world.npcs.some((n) => n && n.name === "Rulesville" && n.persona === "<SYSTEM DIRECTIVE: RULES ENGINE> Be fair.")) problems.push("card-world: NPC not added to w1 on mixed update");
   const rwAfter = await page.evaluate(async () => await window.root.kv.worlds.get("rulesville"));
@@ -283,8 +329,12 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!rwAfter || !Array.isArray(rwAfter.starts) || rwAfter.starts.length !== 2 || rwAfter.starts[0].text !== "You arrive in Rulesville.") problems.push("card-world: update openings wrong: " + JSON.stringify(rwAfter && rwAfter.starts));
 
   // a card WITHOUT an embedded book still becomes a world (rules only)
-  await page.evaluate((i) => { document.querySelectorAll("#chars .prow")[i].querySelector("button.secondary").click(); }, rvRow === 0 ? 1 : 0); // Kael row's world button
-  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Created world"), { timeout: 8000 });
+  await page.evaluate((i) => { document.querySelectorAll("#lwimpChars .prow")[i].querySelector("button.secondary").click(); }, rvRow === 0 ? 1 : 0); // Kael row's world button
+  await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Created world"), { timeout: 8000 }).catch(async (e) => {
+    const dbg = await page.evaluate(() => ({ msg: (document.querySelector("#lwimpMsg") || { textContent: "" }).textContent, rows: [...document.querySelectorAll("#lwimpChars .prow")].map(r => r.querySelector(".pname").textContent), sel: (document.querySelector("#lwimpTargetWorld") || { value: "?" }).value, selHtml: (document.querySelector("#lwimpTargetWorld") || { innerHTML: "?" }).innerHTML.slice(0, 160) }));
+    console.log("CREATED-WORLD DEBUG:", JSON.stringify(dbg, null, 1));
+    throw e;
+  });
   const kw = await page.evaluate(async () => await window.root.kv.worlds.get("kael"));
   if (!kw || !kw.meta || kw.meta.name !== "Kael") problems.push("card-world (no book): world missing: " + JSON.stringify(kw && kw.meta));
   if (!kw || (Array.isArray(kw.lorebook) && kw.lorebook.length)) problems.push("card-world (no book): lorebook should be empty in the v2.6 mapping");
@@ -292,9 +342,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!kw || !kw.meta || kw.meta.name !== "Kael") problems.push("card-world (no book): world missing: " + JSON.stringify(kw && kw.meta));
 
   // ---- World Info -> lorebook ----
-  await page.waitForSelector("#books .prow", { timeout: 8000 });
-  await page.click("#books .prow button");
-  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Imported 2"), { timeout: 8000 });
+  await page.waitForSelector("#lwimpBooks .prow", { timeout: 8000 });
+  await page.click("#lwimpBooks .prow button");
+  await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Imported 2"), { timeout: 8000 });
   world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
   const lb = world && world.lorebook;
   if (!lb || lb.length !== 2) problems.push("book import entry count wrong: " + (lb && lb.length));
@@ -305,8 +355,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!reg || !reg.books || !reg.books.b1 || reg.books.b1.worlds[0].worldId !== "w1") problems.push("book registry missing");
 
   // book Update: re-fetch replaces (no duplicates), removal + re-add by title
-  await page.click("#books .prow button");
-  await page.waitForFunction(() => document.querySelector("#msg").textContent.includes("Updated"), { timeout: 8000 });
+  await page.click("#lwimpBooks .prow button");
+  await page.waitForFunction(() => document.querySelector("#lwimpMsg").textContent.includes("Updated"), { timeout: 8000 });
   world = await page.evaluate(async () => await window.root.kv.worlds.get("w1"));
   if (!world || !world.lorebook || world.lorebook.length !== 2) problems.push("book update duplicated entries: " + (world && world.lorebook && world.lorebook.length));
 

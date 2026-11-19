@@ -1,81 +1,69 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RPG Engine - Import from Loreweaver</title>
-<script src="shims/perchance-shim.js"></script>
-<script src="shims/loreweaver-bridge.js"></script>
-<!-- server-side saves: the import page's kv writes (worlds, registry) mirror to the Loreweaver
-     server immediately, so other devices see an import without this browser reloading the game -->
-<script src="shims/loreweaver-storage.js"></script>
-<style>
-  :root { color-scheme: dark; }
-  body { margin: 0; background: #11100e; color: #e0d6b8; font: 16px/1.5 system-ui, "Segoe UI", sans-serif; }
-  main { max-width: 720px; margin: 0 auto; padding: 32px 16px; }
-  h1 { font-size: 18px; letter-spacing: .12em; text-transform: uppercase; color: #8b9a6e; font-weight: 600; }
-  p { color: #a89c82; }
-  a { color: #a8c47e; }
-  .hint { font-size: 13px; color: #8a8070; margin-top: 4px; }
-  .prow { display: flex; align-items: center; gap: 14px; padding: 12px 10px; border: 1px solid #2a2520; border-radius: 4px; margin-top: 10px; background: #161512; }
-  .prow img { width: 52px; height: 52px; border-radius: 4px; object-fit: cover; background: #1a1a18; flex: none; }
-  .pmain { flex: 1; min-width: 0; }
-  .pname { font-weight: 600; color: #e0d6b8; }
-  .pbadge { display: inline-block; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #11100e; background: #8b9a6e; border-radius: 2px; padding: 1px 6px; margin-left: 8px; vertical-align: 2px; }
-  .pdesc { font-size: 13px; color: #8a8070; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pstatus { font-size: 12px; color: #8a8070; }
-  .pstatus.st-ok { color: #7bd07b; }
-  .pstatus.st-changed { color: #e0b060; }
-  .pbtns { display: flex; gap: 8px; flex: none; }
-  button { padding: 8px 14px; background: #1a1a18; border: 1px solid #8b9a6e; color: #8b9a6e; font: inherit; cursor: pointer; border-radius: 2px; flex: none; }
-  button.secondary { border-color: #3a3528; color: #e0d6b8; }
-  button:disabled { opacity: .45; cursor: default; }
-  #msg { margin-top: 18px; min-height: 1.5em; }
-  .ok { color: #7bd07b; } .bad { color: #e06666; } .info { color: #a89c82; }
-  select#targetWorld { width: 100%; box-sizing: border-box; padding: 8px 10px; background: #1a1a18; border: 1px solid #2a2520; color: #e0d6b8; font: inherit; border-radius: 2px; }
-  label.lbl { display: block; margin: 14px 0 4px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: #8a8070; }
-</style>
-</head>
-<body>
-<main>
-  <h1>Import from Loreweaver</h1>
+// [rpge-patch 018] Import from Loreweaver — the landing page that used to be the floating
+// loreweaver-import.html overlay. Its logic is ported verbatim from that page (the shims
+// it needs — perchance-shim's window.root.kv, loreweaver-bridge.js — are already loaded in
+// the app frame, and writes mirror to the Loreweaver server through loreweaver-storage.js
+// exactly as before). Only the chrome changed: it now mounts into #homeMain as a landing
+// page, with the app's page-header shape.
+export async function mountImportsPage(pane, ctx) {
+  // `pane` is the page's .hm-body (setHomePage builds the header) — everything renders inside it.
+  pane.innerHTML = `
+    <style>
+      .lwimp { max-width: 760px; }
+      .lwimp h2.lwimp-h { font-size: 15px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin: 30px 0 8px; }
+      .lwimp p { color: var(--muted, #a89c82); }
+      .lwimp .hint { font-size: 13px; color: var(--muted2, #8a8070); margin-top: 4px; }
+      .lwimp .prow { display: flex; align-items: center; gap: 14px; padding: 12px 10px; border: 1px solid var(--border, #2a2520); border-radius: 4px; margin-top: 10px; background: var(--panel, #161512); }
+      .lwimp .prow img { width: 52px; height: 52px; border-radius: 4px; object-fit: cover; background: var(--panel2, #1a1a18); flex: none; }
+      .lwimp .pmain { flex: 1; min-width: 0; }
+      .lwimp .pname { font-weight: 600; color: var(--text, #e0d6b8); }
+      .lwimp .pbadge { display: inline-block; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #11100e; background: var(--accent, #8b9a6e); border-radius: 2px; padding: 1px 6px; margin-left: 8px; vertical-align: 2px; }
+      .lwimp .pdesc { font-size: 13px; color: var(--muted2, #8a8070); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .lwimp .pstatus { font-size: 12px; color: var(--muted2, #8a8070); }
+      .lwimp .pstatus.st-ok { color: #7bd07b; }
+      .lwimp .pstatus.st-changed { color: #e0b060; }
+      .lwimp .pbtns { display: flex; gap: 8px; flex: none; }
+      .lwimp button { padding: 8px 14px; background: var(--panel2, #1a1a18); border: 1px solid var(--accent, #8b9a6e); color: var(--accent, #8b9a6e); font: inherit; cursor: pointer; border-radius: 2px; flex: none; }
+      .lwimp button.secondary { border-color: var(--border, #3a3528); color: var(--text, #e0d6b8); }
+      .lwimp button:disabled { opacity: .45; cursor: default; }
+      .lwimp #lwimpMsg { margin-top: 18px; min-height: 1.5em; }
+      .lwimp .ok { color: #7bd07b; } .lwimp .bad { color: #e06666; } .lwimp .info { color: var(--muted, #a89c82); }
+      .lwimp select { width: 100%; box-sizing: border-box; padding: 8px 10px; background: var(--panel2, #1a1a18); border: 1px solid var(--border, #2a2520); color: var(--text, #e0d6b8); font: inherit; border-radius: 2px; }
+      .lwimp label.lbl { display: block; margin: 14px 0 4px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted2, #8a8070); }
+      .lwimp code { color: var(--text, #e0d6b8); background: var(--panel2, #1a1a18); padding: 1px 5px; }
+    </style>
+    <div class="lwimp">
+      <h2 class="lwimp-h" style="margin-top:6px">Personas → hero library</h2>
+      <p>Import your <b>Loreweaver personas</b> as saved heroes. A linked snapshot is created in the
+      game's hero library — forge a hero, and <b>Load</b> it from the library in any world. Mapping:
+      name → <b>Name</b>, description → <b>Persona</b>, avatar → <b>Portrait</b>; the other bio fields
+      stay blank for you to fill in the game (stats are always per-world and never imported).</p>
+      <p class="hint">The import keeps a link to the source persona. Come back here to check for
+      changes — updating overwrites only the imported fields (Name, Persona, Portrait), never
+      anything you added in the game.</p>
+      <div id="lwimpList">Loading personas…</div>
 
-  <h1 style="font-size:15px;margin-top:8px">Personas → hero library</h1>
-  <p>Import your <b>Loreweaver personas</b> as saved heroes. A linked snapshot is created in the
-     game's hero library — open the game, forge a hero, and <b>Load</b> it from the library in any
-     world. Mapping: name → <b>Name</b>, description → <b>Persona</b>, avatar → <b>Portrait</b>;
-     the other bio fields stay blank for you to fill in the game (stats are always per-world and
-     never imported).</p>
-  <p class="hint">The import keeps a link to the source persona. Come back here to check for
-     changes — updating overwrites only the imported fields (Name, Persona, Portrait), never
-     anything you added in the game.</p>
-  <div id="list">Loading personas…</div>
+      <h2 class="lwimp-h">Character cards → world NPCs</h2>
+      <p>Add a Loreweaver <b>character</b> as a standing NPC in one of the game's worlds. Mapping:
+      name → <b>Name</b>, description + personality → <b>Persona</b>, scenario → <b>Extra
+      details</b>, card image → avatar. Fill the rest (race, appearance…) in the game's World
+      Editor. New adventures see the NPC at once; a RUNNING adventure picks it up on its next
+      load.</p>
+      <label class="lbl" for="lwimpTargetWorld">Target world</label>
+      <select id="lwimpTargetWorld"><option value="">Loading worlds…</option></select>
+      <div id="lwimpChars">Loading characters…</div>
 
-  <h1 style="margin-top:34px">Character cards → world NPCs</h1>
-  <p>Add a Loreweaver <b>character</b> as a standing NPC in one of the game's worlds. Mapping:
-     name → <b>Name</b>, description + personality → <b>Persona</b>, scenario → <b>Extra
-     details</b>, card image → avatar. Fill the rest (race, appearance…) in the game's World
-     Editor. New adventures see the NPC at once; a RUNNING adventure picks it up on its next
-     load.</p>
-  <label class="lbl" for="targetWorld">Target world</label>
-  <select id="targetWorld"><option value="">Loading worlds…</option></select>
-  <div id="chars">Loading characters…</div>
+      <h2 class="lwimp-h">World Info → world lorebook</h2>
+      <p>Copy a Loreweaver <b>World Info</b> book into the selected world's lorebook. Keywords
+      (secondary keys merged in) → triggers, constant entries → always-on, comment → title.
+      ST macros like <code>{{user}}</code>/<code>{{char}}</code> stay literal — edit them in the
+      World Editor if needed.</p>
+      <div id="lwimpBooks">Loading World Info…</div>
 
-  <h1 style="margin-top:34px">World Info → world lorebook</h1>
-  <p>Copy a Loreweaver <b>World Info</b> book into the selected world's lorebook. Keywords
-     (secondary keys merged in) → triggers, constant entries → always-on, comment → title.
-     ST macros like <code>{{user}}</code>/<code>{{char}}</code> stay literal — edit them in the
-     World Editor if needed.</p>
-  <div id="books">Loading World Info…</div>
+      <div id="lwimpMsg" role="status"></div>
+    </div>`;
 
-  <div id="msg" role="status"></div>
-  <p class="hint" style="margin-top:26px"><a href="loreweaver-bridge.html">← Back to the bridge page</a></p>
-</main>
-<script>
-(function () {
-  "use strict";
-  var $ = function (id) { return document.getElementById(id); };
-  var say = function (t, cls) { var m = $("msg"); m.textContent = t; m.className = cls || ""; };
+  const $ = (id) => pane.querySelector("#" + id);
+  const say = (t, cls) => { const m = $("lwimpMsg"); m.textContent = t; m.className = cls || ""; };
 
   // Small non-crypto content hash (fnv1a hex) — enough to notice a source change.
   function fnv1a(str) {
@@ -135,9 +123,6 @@
   function cardThumbUrl(avatar) { return "/thumbnail?type=avatar&file=" + encodeURIComponent(avatar); }
 
   // ---- linked-snapshot registry (kv.rpg "lwImports") ----
-  // Source links live BESIDE the world JSON because normalizeWorld strips unknown NPC fields:
-  //   reg.cards[cardAvatar] = { hash, at, worlds: [{ worldId, npcName }] }
-  //   reg.books[bookFileId] = { hash, at, worlds: [{ worldId, titles: [...] }] }
   const REG_KEY = "lwImports";
   async function regRead() {
     const v = await window.root.kv.rpg.get(REG_KEY);
@@ -193,9 +178,6 @@
   // ---- character cards -> world NPCs / standalone worlds ----
   function cardHash(c) { return fnv1a([c.description, c.personality, c.scenario].join("\u0000")); }
 
-  // World Info change detection: the /list endpoint returns no content, so the registry hash is
-  // the book's identity (name). "Update" always re-fetches and replaces the imported entries,
-  // so a stale status is only cosmetic — press Update to re-sync.
   function bookHash(b) { return fnv1a([b.file_id, b.name].join("\u0000")); }
 
   function buildNpcFromCard(card) {
@@ -211,9 +193,6 @@
     };
   }
 
-  // A rules-carrying card (description = GM directives) plus its embedded character_book
-  // is really a mini-world. This turns one into lorebook entries: the rules text as an
-  // always-on "law" entry, the book's cast as "character" entries with their keywords.
   function buildCardLore(card) {
     const lore = [];
     const titles = [];
@@ -255,17 +234,11 @@
     }
   }
 
-  // Re-import of a world-form import: replace exactly the entries we imported (by title)
-  // with fresh ones — game-side additions and edits to other entries are untouched.
   async function refreshWorldImport(card, w) {
     const raw = await loadWorldRaw(w.worldId);
     if (!raw) return;
     const fresh = buildCardLore(card);
     const wf = cardWorldFields(card);
-    // scope-correct migration (v2.6): the old v2.5 import put description+personality+scenario in
-    // one always-on "Rules" law entry — remove exactly that shape (always law titled Rules, no
-    // keywords) and re-map to the first-class fields. A player-authored "Rules" law would also be
-    // caught by this, but a card Update is an explicit act on that import, so this stays safe.
     raw.lorebook = (Array.isArray(raw.lorebook) ? raw.lorebook : []).filter(function (e) {
       return !(e && typeof e === "object" && e.type === "law" && e.activation === "always"
         && String(e.title || "").trim().toLowerCase() === "rules" && (!e.keywords || !e.keywords.length));
@@ -276,7 +249,6 @@
       return t === null || !titles.has(t);
     });
     raw.lorebook.push(...fresh.lore);
-    // first-class fields (overwrite only with fresh content — never blank game-side edits)
     if (wf.story) raw.worldDescription = wf.story;
     if (wf.scenario) raw.scenario = wf.scenario;
     if (wf.vibe) raw.narrativeVibe = (String(raw.narrativeVibe || "").trim())
@@ -284,15 +256,12 @@
     if (wf.tags.length) raw.meta.tags = wf.tags;
     if (wf.nsfw) raw.meta.nsfw = true;
     if (wf.authorNotes) raw.meta.authorNotes = wf.authorNotes;
-    // openings: keep everything not imported by us (custom openings + any game-side one),
-    // re-append the fresh greetings (custom entries ride last, engine convention)
     const prevStartIds = new Set((w.startIds || []).map(String));
     const freshIds = new Set(wf.starts.map(function (s) { return s.id; }));
     const starts = (Array.isArray(raw.starts) ? raw.starts : [])
       .filter(function (s) { return s && typeof s === "object" && s.custom !== true; })
       .filter(function (s) { return !(s.id && (prevStartIds.has(String(s.id)) || freshIds.has(String(s.id)))); });
     if (!Array.isArray(raw.starts) && String(raw.start || "").trim()) {
-      // legacy plain-text opening that isn't ours (our v2.5 imports wrote an empty start)
       starts.push({ id: "start", title: "", description: "", text: String(raw.start).trim(), mode: raw.startMode === "verbatim" ? "verbatim" : "prompt" });
     }
     const customs = (Array.isArray(raw.starts) ? raw.starts : []).filter(function (s) { return s && s.custom === true; });
@@ -313,14 +282,12 @@
     const prev = reg.cards[card.avatar];
     let updated = 0;
     if (prev) {
-      // update every NPC import (follow renames) and every world import
       for (const w of prev.worlds) {
         if (w.asWorld) { await refreshWorldImport(card, w); updated++; continue; }
         const wr = await loadWorldRaw(w.worldId);
         if (!wr || !Array.isArray(wr.npcs)) continue;
         const i = wr.npcs.findIndex(function (n) { return n && n.name === w.npcName; });
         if (i < 0) continue;
-        // only overwrite the imported fields that have content — never blank out game-side edits
         const fresh = buildNpcFromCard(card);
         for (const k of Object.keys(fresh)) if (fresh[k] === "") delete fresh[k];
         wr.npcs[i] = Object.assign({}, wr.npcs[i], fresh);
@@ -333,7 +300,6 @@
     const worlds = prev ? prev.worlds || [] : [];
     const inThisWorld = worlds.some(function (w) { return !w.asWorld && w.worldId === worldId; });
     if (!inThisWorld) {
-      // fresh NPC import into the picked world: avoid a name collision with an existing world NPC
       raw.npcs = Array.isArray(raw.npcs) ? raw.npcs : [];
       let targetName = npc.name;
       const base = npc.name; let n = 2;
@@ -351,15 +317,6 @@
     return { updated: true, count: updated };
   }
 
-  // "Add as world": the card BECOMES a new game world — rules text as an always-on law
-  // entry, embedded book cast as character entries. The game's Worlds list picks it up
-  // through the worlds index.
-  // [v2.6 scope-correct mapping — user decisions 2026-11-18]
-  // description + personality → worldDescription (new world field, always-canon GM block)
-  // scenario → world.scenario (the dedicated WORLD PREMISE slot)
-  // first_mes → opening 1, alternate_greetings → openings 2..N (verbatim = the turn-0 message)
-  // system_prompt → narrativeVibe; creator_notes → meta.authorNotes; tags → meta.tags (nsfw → meta.nsfw)
-  // dropped (no engine slot): mes_example, post_history_instructions, depth_prompt, talkativeness, regex_scripts
   function cardWorldFields(card) {
     const story = [card.description, card.personality]
       .map(function (s) { return String(s || "").trim(); }).filter(Boolean).join("\n\n");
@@ -405,7 +362,6 @@
     if (!Array.isArray(idx)) idx = [];
     const id = await freshWorldId(name, idx);
     const now = new Date().toISOString();
-    // the card's image becomes the world cover (downscaled dataURL, travels with the file)
     const cover = card.avatar ? await toCoverDataUrl(cardThumbUrl(card.avatar)) : "";
     const world = {
       format: "mno-world", version: 1,
@@ -424,8 +380,6 @@
     };
     await window.root.kv.worlds.set(id, world);
     if (!idx.some(function (w) { return w.id === id; })) {
-      // index entries carry the card fields the Worlds grid renders from (the engine's
-      // WorldStore.refreshIndex shape) — a bare {id,name} entry renders a letter placeholder
       idx.push({ id: id, name: name, description: "", tags: wf.tags, nsfw: wf.nsfw, author: "", authorId: "", remix: null, origin: "", cover: cover, createdAt: now, updatedAt: now });
       await window.root.kv.worlds.set("index", idx);
     }
@@ -434,14 +388,14 @@
     const recs = prev ? (prev.worlds || []) : [];
     recs.push({ worldId: id, asWorld: true, titles: fresh.titles });
     await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: recs });
-    notifyGameWorldsChanged();
+    notifyWorldsChanged();
     return { created: true, worldId: id, name: name };
   }
 
-  // Tell a running game (open in an overlay/another tab, same origin) that the worlds library
-  // changed so its Worlds list refreshes live — no page reload needed. The storage shim in the
-  // game page listens on this channel and re-renders the list (patch 003 hook).
-  function notifyGameWorldsChanged() {
+  // Tell the running app (and any other open tab) that the worlds library changed so the
+  // Worlds list refreshes live — the storage shim forwards this channel to the app's
+  // rpge-worlds-changed listener (patch 003 hook).
+  function notifyWorldsChanged() {
     try { new BroadcastChannel("rpge-kv").postMessage({ type: "worlds-changed" }); } catch (e) {}
   }
 
@@ -474,8 +428,6 @@
     if (!lore.length) throw new Error("book has no enabled entries with content");
     const raw = await loadWorldRaw(worldId);
     if (!raw) throw new Error("world not found");
-    // legacy worlds may store the lorebook as one plain-text string — fold it into array form
-    // BEFORE appending, or the initialization below would wipe it
     if (typeof raw.lorebook === "string" && raw.lorebook.trim()) {
       raw.lorebook = [{ title: "", type: "world", activation: "always", keywords: [], content: raw.lorebook.trim() }];
     }
@@ -487,7 +439,6 @@
         const wr = await loadWorldRaw(w.worldId);
         if (!wr) continue;
         wr.lorebook = Array.isArray(wr.lorebook) ? wr.lorebook : [];
-        // remove only the entries we imported earlier (by title), then re-add
         const titles = new Set(w.titles.map(function (t) { return String(t || "").toLowerCase(); }));
         wr.lorebook = wr.lorebook.filter(function (e) {
           const t = e && typeof e === "object" ? String(e.title || "").toLowerCase() : null;
@@ -521,8 +472,8 @@
   // ---- personas UI ----
   function statusFor(p, linked) {
     if (!linked) return { cls: "", text: "not imported" };
-    if (linked.lwSource.descHash !== fnv1a(p.description)) return { cls: "st-changed", text: "linked → hero “" + (linked.label || linked.name || "?") + "” — source changed, update" };
-    return { cls: "st-ok", text: "linked → hero “" + (linked.label || linked.name || "?") + "” — up to date" };
+    if (linked.lwSource.descHash !== fnv1a(p.description)) return { cls: "st-changed", text: "linked → hero \u201c" + (linked.label || linked.name || "?") + "\u201d — source changed, update" };
+    return { cls: "st-ok", text: "linked → hero \u201c" + (linked.label || linked.name || "?") + "\u201d — up to date" };
   }
 
   async function renderPersonas() {
@@ -536,7 +487,7 @@
         return { id: id, name: names[id], description: (descs[id] && descs[id].description) || "", isDefault: id === def };
       });
       const list = await heroList();
-      const box = $("list");
+      const box = $("lwimpList");
       box.innerHTML = rows.length ? "" : "<p>No personas found in Loreweaver.</p>";
       rows.forEach(function (p) {
         const linked = findLinkedHero(list, p.id);
@@ -552,8 +503,8 @@
           this.disabled = true; this.textContent = "…";
           try {
             const r = await importPersona(p);
-            say(r.created ? "Imported “" + esc(p.name) + "” as a saved hero — Load it from the hero library in the game."
-                          : "Updated the linked hero “" + esc(p.name) + "”.", "ok");
+            say(r.created ? "Imported \u201c" + esc(p.name) + "\u201d as a saved hero — Load it from the hero library in the game."
+                          : "Updated the linked hero \u201c" + esc(p.name) + "\u201d.", "ok");
             await renderPersonas();
           } catch (e) {
             say("Import failed: " + (e && e.message || e), "bad");
@@ -563,14 +514,14 @@
         box.appendChild(div);
       });
     } catch (e) {
-      $("list").innerHTML = "";
+      $("lwimpList").innerHTML = "";
       say("Could not load Loreweaver data (" + (e && e.message || e) + "). This page only works when the game is served by the Loreweaver backend.", "bad");
     }
   }
 
   // ---- target world dropdown ----
   async function loadWorlds() {
-    const sel = $("targetWorld");
+    const sel = $("lwimpTargetWorld");
     let idx = [];
     try { idx = (await window.root.kv.worlds.get("index")) || []; } catch (e) {}
     if (!Array.isArray(idx) || !idx.length) {
@@ -589,10 +540,6 @@
   }
 
   // ---- characters UI ----
-  // /api/characters/all returns the FULL cards (~15 MB for a large library), which janks the
-  // page every load. So: fetch only when a target world is picked, cache the parsed list in
-  // kv.lwcache (a browser-local kv folder — NOT mirrored/synced), render instantly from cache,
-  // and refresh in the background when stale (>5 min) or on the Refresh button.
   let cardList = [];
 
   async function cardsCache() { return (await window.root.kv.lwcache.get("cards")) || null; }
@@ -603,10 +550,7 @@
       const c = await cardsCache();
       if (c && Array.isArray(c.list) && c.list.length) {
         cardList = c.list;
-        if (Date.now() - (c.at || 0) > 5 * 60 * 1000) {
-          // stale: re-render from cache now, refresh silently in the background
-          refreshCardsSilently();
-        }
+        if (Date.now() - (c.at || 0) > 5 * 60 * 1000) refreshCardsSilently();
         return;
       }
     }
@@ -631,7 +575,7 @@
       await fetchCardList(false);
       cardList.sort(function (a, b) { return String(a.name || "").localeCompare(String(b.name || "")); });
     } catch (e) {
-      $("chars").innerHTML = "";
+      $("lwimpChars").innerHTML = "";
       say("Could not load characters: " + (e && e.message || e), "bad");
       return;
     }
@@ -639,13 +583,13 @@
   }
 
   async function renderChars() {
-    const worldId = $("targetWorld").value;
+    const worldId = $("lwimpTargetWorld").value;
     if (!worldId) {
-      $("chars").innerHTML = '<p class="hint">Pick a target world above (create one in the game if you have none yet) — then the characters are listed here.</p>';
+      $("lwimpChars").innerHTML = '<p class="hint">Pick a target world above (create one in the game if you have none yet) — then the characters are listed here.</p>';
       return;
     }
     const reg = await regRead();
-    const box = $("chars");
+    const box = $("lwimpChars");
     box.innerHTML = "";
     const head = document.createElement("div");
     head.style.cssText = "margin-top:10px";
@@ -675,11 +619,11 @@
         btn = "Update";
       } else if (asWorld.length) {
         st = linked.hash !== cardHash(c)
-          ? { cls: "st-changed", text: "linked → world “" + asWorld.map(function (w) { return w.worldId; }).join(", ") + "” — source changed; update or add as NPC here" }
-          : { cls: "st-ok", text: "linked → world “" + asWorld.map(function (w) { return w.worldId; }).join(", ") + "” — add as NPC here too" };
+          ? { cls: "st-changed", text: "linked → world \u201c" + asWorld.map(function (w) { return w.worldId; }).join(", ") + "\u201d — source changed; update or add as NPC here" }
+          : { cls: "st-ok", text: "linked → world \u201c" + asWorld.map(function (w) { return w.worldId; }).join(", ") + "\u201d — add as NPC here too" };
         btn = "Add as NPC";
       } else if (linked) {
-        st = { cls: "", text: "linked in “" + linked.worlds.map(function (w) { return w.worldId; }).join(", ") + "” — add to this world too" };
+        st = { cls: "", text: "linked in \u201c" + linked.worlds.map(function (w) { return w.worldId; }).join(", ") + "\u201d — add to this world too" };
         btn = "Add as NPC";
       } else {
         st = { cls: "", text: "not imported" };
@@ -698,8 +642,8 @@
           const full = await window.LoreweaverBridge.api("/api/characters/get", { avatar_url: c.avatar });
           const card = (full && typeof full === "object" && full.name !== undefined) ? full : c;
           const r = await importCardToWorld(card, worldId);
-          say(r.created ? (r.updated ? "Added “" + esc(r.name) + "” as an NPC (other linked imports refreshed)."
-                                     : "Added “" + esc(r.name) + "” as an NPC.")
+          say(r.created ? (r.updated ? "Added \u201c" + esc(r.name) + "\u201d as an NPC (other linked imports refreshed)."
+                                     : "Added \u201c" + esc(r.name) + "\u201d as an NPC.")
                         : "Updated the linked imports (" + r.count + ").", "ok");
           await renderChars();
         } catch (e) {
@@ -715,7 +659,7 @@
           const r = await importCardAsWorld(card);
           localStorage.setItem("rpge.importWorld", r.worldId);
           await loadWorlds();
-          say("Created world “" + esc(r.name) + "” from the card (" + r.worldId + ") — rules and lorebook are in; it's now the target world. Open it from the game's Worlds list.", "ok");
+          say("Created world \u201c" + esc(r.name) + "\u201d from the card (" + r.worldId + ") — rules and lorebook are in; it's now the target world. Open it from the game's Worlds list.", "ok");
           await renderChars();
         } catch (e) {
           say("Import failed: " + (e && e.message || e), "bad");
@@ -733,7 +677,7 @@
     try {
       bookList = (await window.LoreweaverBridge.api("/api/worldinfo/list")) || [];
     } catch (e) {
-      $("books").innerHTML = "";
+      $("lwimpBooks").innerHTML = "";
       say("Could not load World Info: " + (e && e.message || e), "bad");
       return;
     }
@@ -741,13 +685,13 @@
   }
 
   async function renderBooks() {
-    const worldId = $("targetWorld").value;
+    const worldId = $("lwimpTargetWorld").value;
     if (!worldId) {
-      $("books").innerHTML = '<p class="hint">Pick a target world above — then the World Info books are listed here.</p>';
+      $("lwimpBooks").innerHTML = '<p class="hint">Pick a target world above — then the World Info books are listed here.</p>';
       return;
     }
     const reg = await regRead();
-    const box = $("books");
+    const box = $("lwimpBooks");
     box.innerHTML = bookList.length ? "" : "<p>No World Info books found.</p>";
     bookList.forEach(function (b) {
       const linked = reg.books[b.file_id];
@@ -759,7 +703,7 @@
           : { cls: "st-ok", text: "linked → lorebook in this world — up to date" };
         btn = "Update";
       } else if (linked) {
-        st = { cls: "", text: "linked in “" + linked.worlds.map(function (w) { return w.worldId; }).join(", ") + "” — add to this world too" };
+        st = { cls: "", text: "linked in \u201c" + linked.worlds.map(function (w) { return w.worldId; }).join(", ") + "\u201d — add to this world too" };
         btn = "Import book";
       } else {
         st = { cls: "", text: "not imported" };
@@ -785,21 +729,18 @@
     });
   }
 
-  refresh();
   async function refresh() {
     await loadWorlds();
     await renderPersonas();
-    // the characters fetch is big (full cards) — only pull it when a world is targeted
-    if ($("targetWorld").value) await loadCards();
+    if ($("lwimpTargetWorld").value) await loadCards();
     await loadBooks();
   }
   // The storage shim's boot reconcile lands a few seconds AFTER this page reads the worlds
   // index — a fresh browser (or a slow sync) shows "No game worlds yet" even when worlds exist
   // server-side. When the sync completes, re-read the dropdown if it found nothing.
-  window.addEventListener("rpge-saves-synced", function () {
-    if (!$("targetWorld").value) refresh();
-  });
-})();
-</script>
-</body>
-</html>
+  const onSynced = () => { if (!$("lwimpTargetWorld").value) refresh(); };
+  window.addEventListener("rpge-saves-synced", onSynced);
+  refresh();
+  // The page's teardown: drop the sync listener so a re-mount never double-binds.
+  return () => window.removeEventListener("rpge-saves-synced", onSynced);
+}

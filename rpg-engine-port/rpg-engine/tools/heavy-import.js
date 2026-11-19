@@ -2,7 +2,7 @@
 // to pull "Bram Testwell" (real server character) into that world as a standing NPC.
 const { chromium } = require("playwright");
 const b64url = (s) => Buffer.from(s, "utf8").toString("base64url");
-const APP = "http://127.0.0.1:8000/scripts/extensions/third-party/rpg-engine/rpg-engine-port/rpg-engine/app/loreweaver-import.html";
+const APP = "http://127.0.0.1:8000/scripts/extensions/third-party/rpg-engine/rpg-engine-port/rpg-engine/app/index.html#imports";
 const problems = [];
 
 (async () => {
@@ -37,7 +37,7 @@ const problems = [];
   await page.waitForTimeout(6000);
   // pick the target world
   const picked = await page.evaluate(() => {
-    const sel = document.querySelector("#targetWorld");
+    const sel = document.querySelector("#lwimpTargetWorld");
     if (!sel) return "no select";
     const opt = [...sel.options].find(o => (o.textContent || o.value).includes("wimport") || (o.textContent || "").includes("Import Target"));
     if (!opt) return "no option: " + [...sel.options].map(o => o.textContent).join("|").slice(0, 200);

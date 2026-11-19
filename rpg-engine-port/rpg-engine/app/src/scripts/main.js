@@ -44,8 +44,8 @@ import { getCacheEntry, readCacheEntries } from "./libcache.js";
 import { searchControl, searchBar, switchEl, closeSearchPop, showNsfw, setShowNsfw, ICON_SEARCH } from "./search-bar.js";
 import { ICON_FS_EXPAND, ICON_FS_COMPRESS, ICON_BACK_CHEV, ICON_ED_NARRATIVE, ICON_ED_TRACKERS, ICON_ED_NPC, ICON_IMPORT, ICON_EXPORT, ICON_DOWNLOAD, ICON_HEART, ICON_COMMENT, ICON_NOTE_DOC, ICON_OVERVIEW, ICON_INFO, ICON_FOLDER, ICON_FOLDER_OPEN, ICON_MANAGE } from "./icons.js";
 import { routedGenText, aiModelSection, aiModelLabel } from "./ai-provider.js";
+import { mountImportsPage } from "./loreweaver-import.js";
     import { routedGenImage, imageProviderControls, imageModelLabel } from "./image-provider.js";
-import { aiCloseBlocker } from "./ai-provider.js";
 import { imageCloseBlocker } from "./image-provider.js";
 import { getAiConfig, saveAiConfig } from "./ai-provider.js";
 import { saveImageConfig } from "./image-provider.js";
@@ -102,6 +102,22 @@ setAnnouncementActionHandler((act) => {
     return;
   }
   if (HOME_MOUNTS[act]) setHomePage(act, { push: true });
+});
+
+// [rpge-patch 018] Deep links from the Loreweaver extension buttons (postMessage from the
+// wrapper's game overlay — the wrapper and the app share an origin). "imports" mounts the
+// Import page; "settings/<section>" opens the Settings popup on that section. Works from the
+// chat too: the landing is re-entered first (the session stays standing behind it).
+window.addEventListener("message", (e) => {
+  const d = e && e.data;
+  if (!d || d.rpgeOpen !== true) return;
+  const t = String(d.target || "");
+  const open = async () => {
+    if ($("landing") && $("landing").hidden) { try { await goToLanding({ keepSession: true }); } catch (err) {} }
+    if (t === "imports") { await setHomePage("imports", { push: true }); return; }
+    if (t === "settings" || t.startsWith("settings/")) { openSettingsPanel(t === "settings" ? null : t.slice(9)); return; }
+  };
+  open().catch((err) => console.warn("[rpge] deep link failed:", err));
 });
 
 const $ = (id) => document.getElementById(id);
@@ -429,7 +445,10 @@ async function init() {
   });
   // [rpge-patch 003] external world writes (import page, sync) refresh the Worlds list live —
   // see PATCHES.md; the storage shim forwards BroadcastChannel("rpge-kv") worlds-changed here.
-  window.addEventListener("rpge-worlds-changed", () => { try { refreshWorldNameCache(); refreshLanding(); } catch (e) { /* optional */ } });
+  // [rpge-patch 018] the import page now lives IN this frame: a remount would tear down its DOM
+  // mid-click (and lose its in-flight import), so when it is the mounted page it refreshes its
+  // own dropdowns and the landing re-renders on the next page switch instead.
+  window.addEventListener("rpge-worlds-changed", () => { try { refreshWorldNameCache(); if (homePage !== "imports") refreshLanding(); } catch (e) { /* optional */ } });
   await reconcileWorldAuthors(); // bring the worlds WE authored up to date with this identity — never fatal
   memory = new MemorySystem(genText);
   npcLife = new NpcLifeSystem(genText);
@@ -1124,6 +1143,10 @@ const HOME_SECTIONS = [
     title: "Worlds", sub: "Your local worlds library — ready to play." },
   { id: "adventures", label: "Adventures", iconImg: "images/icon-adventures.png", zone: "primary", accent: "--accent-gold", rgb: "194,162,90",
     title: "Adventures", sub: "Your saved journeys — pick up where you left off." },
+  // [rpge-patch 018] the import page moved from a floating overlay (loreweaver-import.html)
+  // into the landing nav, right under Adventures. Its logic lives in loreweaver-import.js.
+  { id: "imports", label: "Import from Loreweaver", icon: "🧙", zone: "primary", accent: "--accent", rgb: "139,154,110",
+    title: "Import from Loreweaver", sub: "Bring personas, characters and lore into the game." },
   { id: "explore", label: "Explore", iconImg: "images/icon-explore.png", zone: "primary", accent: "--accent-arcane", rgb: "176,115,91",
     title: "Explore Worlds", sub: "Community worlds — published by players." },
   { id: "discussion", label: "Tavern", iconImg: "images/icon-board.png", zone: "util", accent: "--accent-arcane", rgb: "176,115,91",
@@ -1152,6 +1175,7 @@ const HN_ACTIONS = [
 const HOME_MOUNTS = {
   worlds: mountWorldsPage,
   adventures: mountAdventuresPage,
+  imports: mountImportsPage,
   explore: mountExplorePage,
   user: mountUserPage
 };
@@ -1180,6 +1204,7 @@ const EXPLORE_SCROLL_TTL_MS = 15 * 60 * 1000;
 const homeUI = {
   worlds: { q: "", sources: [], sourcesNot: [], tags: [], tagsNot: [], author: null, sort: "recent", scroll: 0, folder: "all" },
   adventures: { q: "", sort: "recent", worlds: [], worldsNot: [], group: false, scroll: 0 },
+  imports: { scroll: 0 },
   explore: { scroll: 0, at: 0 },
   user: { scroll: 0 }
 };
@@ -1458,6 +1483,16 @@ async function applyHomeRoute(route) {
 
 window.addEventListener("hashchange", async () => {
   if (!homePage) return;
+  // [rpge-patch 018] `#settings/<section>` deep links must work from the chat too: the
+  // landing is re-entered first (the session stays standing behind it), then the popup
+  // opens. This check sits before the landing-hidden early return on purpose.
+  if ($("landing") && $("landing").hidden && /^#settings\b/.test(location.hash)) {
+    try { await goToLanding({ keepSession: true }); } catch (e) {}
+    const s = location.hash.replace(/^#settings\/?/, "");
+    openSettingsPanel(s || null);
+    try { syncHomeHash("worlds"); } catch (e) {}
+    return;
+  }
   if ($("landing") && $("landing").hidden) return;
   // A stale platform echo (our own superseded write forwarded back, with no traversal behind it)
   // must not drive the route — it would reopen a panel we just closed. Repair the bar instead.
@@ -1479,6 +1514,15 @@ window.addEventListener("hashchange", async () => {
     // Legacy `#discussion` links (and toast fallbacks) open the panel — Discussion
     // used to be a page; now it floats over whatever is showing.
     if (/^#discussion\b/.test(location.hash)) { openDiscussionPanel().catch(() => {}); return; }
+    // [rpge-patch 018] `#settings/<section>` deep links (Loreweaver extension's AI Bridge
+    // button): re-enter the landing if a chat owns the screen, then open the popup.
+    if (/^#settings\b/.test(location.hash)) {
+      if ($("landing") && $("landing").hidden) { try { await goToLanding({ keepSession: true }); } catch (e) {} }
+      const s = location.hash.replace(/^#settings\/?/, "");
+      openSettingsPanel(s || null);
+      try { syncHomeHash("worlds"); } catch (e) {}
+      return;
+    }
     // A bridge return in progress (popstate re-entering the chat) also reads `#session` here —
     // stand down and let it own the navigation instead of mounting a landing behind the chat.
     if (bridgeReturnInProgress({ menuPending: menuReturnSession, userPending: userBackSession })) return;
@@ -1642,6 +1686,14 @@ async function renderLanding(sessions) {
   await setHomePage(route.page || "worlds", { force: true });
   if (route.target) applyHomeRoute(route);
   if (/^#discussion\b/.test(location.hash)) openDiscussionPanel().catch(() => {});
+  // [rpge-patch 018] `#settings/<section>` deep links (from the Loreweaver extension's
+  // AI Bridge button, or old bookmarks): the route parser doesn't know them, so open the
+  // Settings popup directly instead of silently landing on Worlds.
+  if (/^#settings\b/.test(location.hash)) {
+    const s = location.hash.replace(/^#settings\/?/, "");
+    openSettingsPanel(s || null);
+    try { syncHomeHash("worlds"); } catch (e) {}
+  }
   checkInboundShare(); // ?importdata= return path — fire and forget (it notifies/pops up on its own)
   scheduleCommunityDeferredWork();
   scheduleWorldEditorPreload();
@@ -3281,19 +3333,20 @@ function openSettingsPanel(section = null) {
   overlay.querySelector(".pf-md-back").onclick = backToNav;
 
   let closed = false;
-  // AI Model / Image Gen persist on every input (no Save step); the only gate is
-  // here: a keyless remote provider blocks closing until a key is entered or
-  // Perchance is re-picked. Jumps to the offending section so the key field is
-  // right there. Back-close re-pushes while this returns false (see back-close.js).
+  // Image Gen persists on every input (no Save step); the only gate is here: a
+  // keyless remote image provider blocks closing until a key is entered or the
+  // Perchance image source is re-picked. Jumps to the offending section so the
+  // key field is right there. Back-close re-pushes while this returns false (see
+  // back-close.js). AI Model has no gate since patch 018 — there is no fallback
+  // to revert to, and a missing profile shows its own empty state.
   const guardProviderClose = async () => {
     let block = null;
     let sectionId = null;
-    try { block = aiCloseBlocker(); if (block) sectionId = "aimodel"; } catch (e) {}
-    if (!block) { try { block = imageCloseBlocker(); if (block) sectionId = "imagegen"; } catch (e) {} }
+    try { block = imageCloseBlocker(); if (block) sectionId = "imagegen"; } catch (e) {}
     if (!block) return true;
     try { if (applySelect) await applySelect(sectionId); } catch (e) {}
     // Blocking info must not be a toast (too easy to miss): a modal popup over
-    // the panel, with a one-click way out that reverts to Perchance AI.
+    // the panel, with a one-click way out that reverts to the Perchance image source.
     const usePerchance = await ConfirmPopup.open({
       title: "API key missing",
       message: "You selected " + block.label + " for " + block.section + ", but no API key is saved for it. Without a key the app would silently keep using Perchance AI.",
@@ -3301,19 +3354,13 @@ function openSettingsPanel(section = null) {
     });
     if (usePerchance) {
       try {
-        if (sectionId === "aimodel") {
-          const cur = getAiConfig();
-          saveAiConfig({ provider: "perchance", allowReasoning: cur.allowReasoning, thinkingBudget: cur.thinkingBudget, customParams: cur.customParams });
-          try { window.dispatchEvent(new Event("mno:aimodel-changed")); } catch (e) {}
-        } else {
-          saveImageConfig({ provider: "perchance" });
-          try { window.dispatchEvent(new Event("mno:imagegen-changed")); } catch (e) {}
-        }
+        saveImageConfig({ provider: "perchance" });
+        try { window.dispatchEvent(new Event("mno:imagegen-changed")); } catch (e) {}
       } catch (e) {}
       return true;
     }
     try {
-      const keyEl = panel.querySelector(sectionId === "aimodel" ? ".pf-ai-key" : ".pf-img-key");
+      const keyEl = panel.querySelector(".pf-img-key");
       if (keyEl) { keyEl.focus({ preventScroll: true }); keyEl.scrollIntoView({ block: "nearest" }); }
     } catch (e) {}
     return false;
