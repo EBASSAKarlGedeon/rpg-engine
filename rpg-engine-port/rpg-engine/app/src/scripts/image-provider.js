@@ -23,7 +23,20 @@ const IMAGE_PROVIDERS = [
   { id: "perchance", label: "Perchance AI" },
   { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-image-1" },
   { id: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-5-image-mini" },
+  // Server-backed (rpge-patch 017): images ride the Loreweaver bridge to
+  // /api/openrouter/image/generate — the server holds the OpenRouter key, so no
+  // key row, no base URL, and it only exists when the bridge shim is loaded.
+  { id: "loreweaver", label: "Loreweaver (server)", model: "openai/gpt-5-image-mini" },
 ];
+
+// The Loreweaver bridge shim (app/shims/loreweaver-bridge.js) is present only
+// when the engine runs inside Loreweaver: server-held keys, CSRF-wrapped calls.
+// Returns null in standalone Perchance mode — callers treat that as "unavailable".
+function bridgeApi() {
+  const b = window.LoreweaverBridge;
+  if (!b || typeof b.isEnabled !== "function" || typeof b.api !== "function" || !b.isEnabled()) return null;
+  return b;
+}
 
 function labelOf(id) {
   return (IMAGE_PROVIDERS.find((p) => p.id === id) || IMAGE_PROVIDERS[0]).label;
@@ -34,10 +47,14 @@ function getPreset(id) {
 }
 
 function readStore() {
+  const raw = localStorage.getItem(CFG_KEY);
   let s = {};
-  try { s = JSON.parse(localStorage.getItem(CFG_KEY) || "{}") || {}; } catch (e) {}
+  try { s = JSON.parse(raw || "{}") || {}; } catch (e) {}
   const ids = IMAGE_PROVIDERS.map((p) => p.id);
-  const provider = ids.includes(s.provider) ? s.provider : "perchance";
+  // Out-of-the-box default under Loreweaver: the server provider needs no key,
+  // so a fresh install can generate portraits/scenes without any setup.
+  const fallbackProvider = (!raw && bridgeApi()) ? "loreweaver" : "perchance";
+  const provider = ids.includes(s.provider) ? s.provider : fallbackProvider;
   const saved = s.providers && typeof s.providers === "object" ? s.providers : {};
   const providers = {};
   for (const p of IMAGE_PROVIDERS) {
@@ -138,6 +155,7 @@ export function saveImageConfig(cfg, key) {
 export function activeImageProvider() {
   const c = getImageConfig();
   if (c.provider === "perchance") return "perchance";
+  if (c.provider === "loreweaver") return bridgeApi() ? "loreweaver" : "perchance";
   return getAiKeyFor(c.provider) ? c.provider : "perchance";
 }
 
@@ -159,6 +177,14 @@ export function imageRouteUsesExternal(route) {
 export function imageCloseBlocker() {
   const c = getImageConfig();
   if (c.provider === "perchance") return null;
+  if (c.provider === "loreweaver") {
+    if (bridgeApi()) return null;
+    return {
+      section: "Image Gen",
+      label: labelOf(c.provider),
+      message: "Loreweaver (server) needs the Loreweaver bridge. Open the app inside Loreweaver (see the Settings → Loreweaver block), or switch back to Perchance AI."
+    };
+  }
   if (getAiKeyFor(c.provider)) return null;
   return {
     section: "Image Gen",
@@ -222,6 +248,44 @@ function apiError(res, fallback) {
     (j) => new Error("Image API error: " + ((j && j.error && (j.error.message || j.error)) || fallback)),
     () => new Error("Image API error: " + fallback)
   );
+}
+
+// Loreweaver (server) backend — rpge-patch 017. Posts to the Loreweaver server's
+// OpenRouter image endpoint (same one the chat-side Image Generation extension
+// uses), which resolves the key server-side and returns { format, image: base64 }.
+// Aspect ratio maps from the call's resolution opt (portrait 2:3, landscape 3:2,
+// square 1:1); reference images and quality/resolution tiers have no server-side
+// equivalent today and are ignored, like on the Perchance path.
+async function loreweaverGenImage(prompt, opts = {}) {
+  const b = bridgeApi();
+  if (!b) throw new Error("Loreweaver server bridge is not connected.");
+  const cfg = getImageConfig();
+  const aspect = aspectOf(opts.resolution);
+  const body = {
+    model: cfg.model || getPreset("loreweaver").model,
+    prompt: String(prompt || ""),
+    aspect_ratio: aspect === "portrait" ? "2:3" : aspect === "landscape" ? "3:2" : "1:1",
+  };
+  let out = null;
+  try {
+    out = await b.api("/api/openrouter/image/generate", body);
+  } catch (e) {
+    throw new Error("Loreweaver server image error: " + ((e && e.message) || e));
+  }
+  const b64 = out && out.image;
+  if (!b64) throw new Error("No image returned — try again.");
+  const fmt = String(out.format || "png").toLowerCase();
+  const mime = "image/" + (fmt === "jpg" || fmt === "jpeg" ? "jpeg" : fmt);
+  return { dataUrl: `data:${mime};base64,${b64}`, provider: "loreweaver" };
+}
+
+// The account's real image models on OpenRouter (server resolves the key).
+// Empty list when the bridge is missing — the picker just shows the typed value.
+export async function loreweaverImageModels() {
+  const b = bridgeApi();
+  if (!b) return [];
+  const models = await b.api("/api/openrouter/models/image", {});
+  return Array.isArray(models) ? models.filter((m) => m && m.value).map((m) => ({ value: m.value, text: m.text || m.value })) : [];
 }
 
 // Reference-image URLs from call opts (scene-image character refs). Anything
@@ -454,12 +518,21 @@ export function routedGenImage(prompt, opts) {
     delete o.barePrompt; // only a fallback for ref-capable providers, meaningless here
     return perchanceGenImage(prompt, o);
   }
+  if (getImageConfig().provider === "loreweaver") return loreweaverGenImage(prompt, cleanOpts || {});
   return openaiCompatibleGenImage(prompt, cleanOpts || {});
 }
 
 // Free key check (no generation cost, so no spend): OpenAI's model list needs
 // auth, while OpenRouter's is public — its dedicated key-info endpoint is used.
 export async function testImageConnection(baseUrl, key, provider) {
+  // Loreweaver (server): no key involved — a free probe of the server's image
+  // model list proves the bridge AND the server's OpenRouter key are alive.
+  if (provider === "loreweaver") {
+    const b = bridgeApi();
+    if (!b) throw new Error("Loreweaver server bridge is not connected.");
+    await b.api("/api/openrouter/models/image", {});
+    return true;
+  }
   const base = String(baseUrl || "").replace(/\/+$/, "");
   const url = provider === "openrouter" ? base + "/auth/key" : base + "/models";
   const headers = {};
@@ -512,6 +585,7 @@ export function imageProviderControls(opts = {}) {
       input[type="range"].mno-range::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #8B9A6E; border: 1px solid #00000088; box-shadow: 0 1px 4px rgba(0,0,0,.6); cursor: pointer; }
       input[type="range"].mno-range:hover::-moz-range-thumb { filter: brightness(1.2); }
       .pf-img-saved.is-warn { color: var(--warn); }
+      .pf-img-baserow[hidden], .pf-ai-keybox[hidden], .pf-img-modellist-row[hidden] { display: none; }
       .pf-keyrow { flex-wrap: nowrap; align-items: stretch; }
       .pf-keyrow .mini { align-self: stretch; display: inline-flex; align-items: center; justify-content: center; }
       .pf-img-routelist .pf-img-routerow + .pf-img-routerow { margin-top: 12px; }
@@ -524,8 +598,8 @@ export function imageProviderControls(opts = {}) {
     <p class="pf-hint pf-img-guide">How closely images follow the prompt. Lower is looser and more creative, higher is stricter. Default ${IMAGE_GUIDANCE_DEFAULT}.</p>
     <div class="pf-row pf-img-guide"><button class="mini pf-guide-reset" type="button">Reset to default (${IMAGE_GUIDANCE_DEFAULT})</button></div>
     <div class="pf-img-remote" hidden>
-      <div class="pf-kv"><span class="pf-k">Base URL</span></div>
-      <input class="popup-in pf-img-base" autocomplete="off" spellcheck="false">
+      <div class="pf-kv pf-img-baserow"><span class="pf-k">Base URL</span></div>
+      <input class="popup-in pf-img-base pf-img-baserow" autocomplete="off" spellcheck="false">
       <div class="pf-ai-keybox">
       <div class="pf-kv"><span class="pf-k">API key</span></div>
       <div class="pf-row pf-keyrow"><input class="popup-in pf-img-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" style="flex:1"><button class="mini pf-img-show" type="button">Show</button><button class="mini pf-img-clear" type="button" title="Delete the saved key for this provider">Clear</button></div>
@@ -533,7 +607,9 @@ export function imageProviderControls(opts = {}) {
       <div class="pf-info">🔑 Shared key with AI Model.</div>
       </div>
       <div class="pf-kv"><span class="pf-k">Model</span></div>
-      <input class="popup-in pf-img-model" autocomplete="off" spellcheck="false">
+      <input class="popup-in pf-img-model" autocomplete="off" spellcheck="false" list="pf-img-model-list">
+      <datalist id="pf-img-model-list" class="pf-img-modellist"></datalist>
+      <p class="pf-hint pf-img-modellist-row" hidden>The list is your account's real image models on the server.</p>
       <details class="foldbox pf-img-routes" open>
       <summary>External AI images</summary>
       <p class="pf-hint">Each image job below can use the provider above — or fall back to Perchance AI when switched off. Off is useful when the external model is worse at a job, or to save credits.</p>
@@ -557,6 +633,8 @@ export function imageProviderControls(opts = {}) {
   const baseEl = box.querySelector(".pf-img-base");
   const keyEl = box.querySelector(".pf-img-key");
   const modelEl = box.querySelector(".pf-img-model");
+  const modelListEl = box.querySelector(".pf-img-modellist");
+  const modelListHint = box.querySelector(".pf-img-modellist-row");
   const resEl = box.querySelector(".pf-img-res");
   const qualityEl = box.querySelector(".pf-img-quality");
   const statusEl = box.querySelector(".pf-img-status");
@@ -590,6 +668,30 @@ export function imageProviderControls(opts = {}) {
     provEl.appendChild(o);
   }
   provEl.value = cfg.provider;
+  // Loreweaver (server): the model picker's datalist is filled with the
+  // account's real image models from the server (fetched once, cached).
+  let modelListModel = null;
+  const paintModelList = () => {
+    modelListEl.innerHTML = "";
+    if (!Array.isArray(modelListModel)) return;
+    for (const m of modelListModel) {
+      const o = document.createElement("option");
+      o.value = m.value;
+      o.label = m.text;
+      modelListEl.appendChild(o);
+    }
+  };
+  const fetchModelList = () => {
+    if (modelListModel === undefined) return; // fetch already failed once
+    if (modelListModel) { paintModelList(); return; }
+    loreweaverImageModels().then((ms) => {
+      modelListModel = ms;
+      paintModelList();
+    }).catch((e) => {
+      console.warn("Image model list failed:", e);
+      modelListModel = undefined; // retry on the next provider re-pick
+    });
+  };
   const loadEntry = (id) => {
     const entry = getImageProviderEntry(id);
     baseEl.value = entry.baseUrl;
@@ -600,6 +702,7 @@ export function imageProviderControls(opts = {}) {
     const o = sanitizeImageOpts(entry.opts);
     resEl.value = o.resolution;
     qualityEl.value = [...qualityEl.options].some((op) => op.value === o.quality) ? o.quality : "";
+    if (id === "loreweaver") fetchModelList();
   };
   // Per-job routing switches (global, not per provider): which image calls may
   // use the external provider above. Anything off falls back to Perchance AI.
@@ -655,18 +758,25 @@ export function imageProviderControls(opts = {}) {
   const paint = () => {
     const isPerchance = provEl.value === "perchance";
     const isOpenRouter = provEl.value === "openrouter";
+    const isLw = provEl.value === "loreweaver";
     remoteBox.hidden = isPerchance;
     guideRows.forEach((el) => { el.hidden = !isPerchance; });
     resRows.forEach((el) => { el.hidden = !isOpenRouter; });
+    box.querySelectorAll(".pf-img-baserow").forEach((el) => { el.hidden = isLw; });
+    const keyBox = box.querySelector(".pf-ai-keybox");
+    if (keyBox) keyBox.hidden = isLw;
+    if (modelListHint) modelListHint.hidden = !isLw;
     if (!statusEl.dataset.touched) {
       const entry = getImageProviderEntry(provEl.value);
-      statusEl.textContent = !isPerchance && !entry.hasKey && !keyEl.value.trim() ? "No key saved yet." : "";
+      statusEl.textContent = !isPerchance && !isLw && !entry.hasKey && !keyEl.value.trim() ? "No key saved yet." : "";
     }
   };
   const refreshUsingLine = (next) => {
     // The line only exists for the fallback warning — a healthy selection needs
     // no commentary (the dropdown itself shows what is active).
-    const fallback = next.provider !== "perchance" && !getAiKeyFor(next.provider);
+    const fallback = next.provider === "loreweaver"
+      ? !bridgeApi()
+      : (next.provider !== "perchance" && !getAiKeyFor(next.provider));
     if (fallback) {
       savedEl.textContent = "⚠️ Using Perchance AI for now — enter a key to use " + labelOf(next.provider) + ".";
     } else {
@@ -747,10 +857,15 @@ export function imageProviderControls(opts = {}) {
     statusEl.dataset.touched = "1";
     statusEl.textContent = "Testing…";
     try {
-      const key = keyEl.value.trim() || (getImageProviderEntry(provEl.value).hasKey ? getAiKeyFor(provEl.value) : "");
-      if (!key) throw new Error("Enter an API key first.");
-      await testImageConnection(baseEl.value.trim(), key, provEl.value);
-      statusEl.textContent = "✓ Connected — key is valid.";
+      if (provEl.value === "loreweaver") {
+        await testImageConnection("", "", "loreweaver");
+        statusEl.textContent = "✓ Connected — the server's key is valid.";
+      } else {
+        const key = keyEl.value.trim() || (getImageProviderEntry(provEl.value).hasKey ? getAiKeyFor(provEl.value) : "");
+        if (!key) throw new Error("Enter an API key first.");
+        await testImageConnection(baseEl.value.trim(), key, provEl.value);
+        statusEl.textContent = "✓ Connected — key is valid.";
+      }
     } catch (err) {
       statusEl.textContent = "✖ " + (err.message || err);
     }

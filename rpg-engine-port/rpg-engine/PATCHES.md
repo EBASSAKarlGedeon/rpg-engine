@@ -489,3 +489,35 @@ the Connection Manager UI.
 controls need a hover or a synthetic JS click. Toast text lives in `#toastEl` (id, not class).
 `normalizeWorld` silently drops a malformed `trackers: {defs:[]}` object (file form is a plain
 array) with no warning — improvement candidate, not fixed.
+
+---
+
+## [rpge-patch 017] Loreweaver image bridge — server-side image provider (2026-11-21)
+
+The engine's image jobs (NPC portraits auto-generating, scene illustrations, hero/world art) gain
+a fourth provider in Settings → Image Gen: **"Loreweaver (server)"**. Like the text bridge, the
+key stays on the server: calls ride the Loreweaver bridge shim (`LoreweaverBridge.api`) to the
+server's own OpenRouter image endpoint (`/api/openrouter/image/generate`, the same endpoint the
+chat-side Image Generation extension uses — see `docs/IMAGE-GENERATION.md` §4). Shape chosen as
+"prompt + dimensions in, image out" so a future patch can point it at any other server-backed
+backend (e.g. a local ComfyUI) without touching the engine again (option C).
+
+- `image-provider.js`: new provider preset (`loreweaver`, default model `openai/gpt-5-image-mini`);
+  `bridgeApi()` gate; `loreweaverGenImage` (aspect 1:1 / 2:3 / 3:2 mapped from the call's
+  resolution opt; refs/tier opts ignored like on the Perchance path); `loreweaverImageModels()`
+  fed by `/api/openrouter/models/image`; `testImageConnection` probes the models list for free;
+  `activeImageProvider` + `imageCloseBlocker` treat "bridge connected" as the key requirement;
+  routed dispatch in `routedGenImage`; per-route toggles work unchanged (off → Perchance
+  fallback, which still errors under Loreweaver as before).
+- **Out-of-the-box default**: with no stored `mno.imageProvider` AND the bridge connected, the
+  provider defaults to Loreweaver (server) — portraits auto-generate for new NPCs from the first
+  boot (user decision: portraits ON by default), scenes ride the 🎨 button as before.
+- Settings UI: Base URL + API key rows hidden for the server provider (the server holds the
+  key); Model field gets a datalist populated from the account's real image models; Test button
+  verifies bridge + server key without spending a generation; the "No key saved yet" status and
+  the keyless fallback warning are suppressed for it.
+
+Verified by `tools/imgbridge-test.js` (13 logic checks against the deployed module: fresh
+defaults with/without bridge, active-provider fallback, close blocker both ways, generate body
+shape + aspect mapping both ways, route-off fallback, test-connection, model list shape,
+bridge-down throw).
