@@ -22,7 +22,7 @@ import { imageGuidance } from "./image-gen-prefs.js";
 import { utf8ByteLen } from "./popups.js";
 import {
   normalizeLorebook, normalizeLoreEntry, splitKeywords, lorebookTitleList, lorebookToText,
-  LORE_TYPES, LORE_FORMAT, LORE_EXTENSION
+  keywordLoreForText, LORE_TYPES, LORE_FORMAT, LORE_EXTENSION
 } from "./lorebook.js";
 import { NPC_NAME_BANNED } from "./banned-words.js";
 
@@ -3848,6 +3848,13 @@ function renderCover(v) {
   }
   function npcAiInstruction(userText) {
     const lore = lorebookToText(M.lorebook, { activation: null, capChars: 3500 });
+    // [rpge-patch 008] Keyword-matched entries IN FULL: the blind 3500-char slice is book-order,
+    // so a character whose entry sits deep in a big book was invisible to the generator and the
+    // AI invented contradicting details. `keywordLoreForText` matches each keyword-triggered
+    // entry's trigger words against the REQUEST text and returns those entries uncapped-per-entry
+    // (total capped) — "generate Saburo" now always pulls Saburo's complete entry. No hits (vague
+    // request) → empty → prompt identical to before.
+    const matchedLore = keywordLoreForText(M.lorebook || [], userText || "", { capChars: 6000 });
     const firstStart = (M.starts && M.starts[0] && M.starts[0].text) || M.start || "";
     const story = [
       M.narrativeVibe ? "NARRATIVE VIBE:\n" + String(M.narrativeVibe).slice(0, 1200) : "",
@@ -3868,6 +3875,7 @@ function renderCover(v) {
       `World: ${(M.meta && M.meta.name) || "(unnamed)"}`,
       story,
       lore ? "WORLD LOREBOOK (canon):\n" + lore : "",
+      matchedLore ? "LOREBOOK ENTRIES MATCHING THE REQUEST (canon — build this NPC consistently with these facts; they describe the requested character or their world):\n" + matchedLore : "",
       existing ? "EXISTING CAST (do NOT reuse these names): " + existing : "",
       "NPC REQUEST:\n" + userText,
       nameRule,

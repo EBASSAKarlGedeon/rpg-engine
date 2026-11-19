@@ -223,3 +223,22 @@ deliberately untouched — the raw pasted text IS its source.
 worldDescription (patch 004 worlds); old worlds generate exactly as before.
 
 **Revert:** delete the two `M.worldDescription ? … : ""` lines.
+
+## [rpge-patch 008] NPC generator pulls keyword-matched lorebook entries IN FULL
+
+**Files:** `src/scripts/world-editor.js` (import + `npcAiInstruction`).
+
+**Why (user request 2026-11-18):** generating an NPC for an existing character (present as a
+lorebook entry deep in a big book) worked only if the entry happened to sit inside the blind
+first-3500-chars slice — otherwise the AI invented plausible but contradicting details.
+
+**Change:** `npcAiInstruction` additionally feeds `keywordLoreForText(M.lorebook, userText,
+{ capChars: 6000 })` as `LOREBOOK ENTRIES MATCHING THE REQUEST (canon — build this NPC
+consistently with these facts)`. Each keyword-triggered entry's trigger words are matched
+against the REQUEST text; hits are rendered whole regardless of book position. No hits (vague
+request like "a shopkeeper") → the section is empty and the prompt is identical to before.
+
+**Impact when bridge is off:** none for old behavior; matched entries add at most ~6 k chars
+(~1.5 k tokens) — still well under the Perchance input cap.
+
+**Revert:** remove the `matchedLore` lines and the import.
