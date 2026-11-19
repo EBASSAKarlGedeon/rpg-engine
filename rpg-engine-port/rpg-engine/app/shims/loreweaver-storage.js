@@ -34,6 +34,14 @@
   const CFG_KEY = "rpge.serverSaves";
   const META_KEY = "rpge.kvMeta";
   const MIRROR_FOLDERS = ["rpg", "worlds"];
+  // [rpge-patch 018 fix] A fresh browser used to clobber the server on boot: the app's own
+  // initialization writes (e.g. worlds/index normalization) pushed the LOCAL empty state to
+  // the server BEFORE the first reconcile had pulled anything — every fresh boot zeroed the
+  // server's worlds index (the real data survived only as conflict copies). Writes are now
+  // gated: until the first reconcile completes, a push is only allowed for keys the server
+  // does not have; keys the server HAS are left alone and merged by the reconcile.
+  let firstSyncDone = false;
+  const serverNames = new Set();
   const DEBOUNCE_MS = 400;
 
   function readCfg() {
@@ -119,6 +127,10 @@
   function mirrorFolder(name, folder) {
     const wrapped = Object.create(folder); // reads pass through to the local store
     const pushValue = async (key, value) => {
+      if (!firstSyncDone && serverNames.has(nameOf(name, key))) {
+        console.warn("[rpge saves] skipped pre-sync push of", name + "/" + key, "— server copy not yet loaded; first reconcile will merge it.");
+        return;
+      }
       try {
         const r = await api("put", { name: nameOf(name, key), content: JSON.stringify(value === undefined ? null : value) });
         const m = readMeta();
@@ -129,6 +141,10 @@
       }
     };
     const pushDelete = async (key) => {
+      if (!firstSyncDone && serverNames.has(nameOf(name, key))) {
+        console.warn("[rpge saves] skipped pre-sync delete of", name + "/" + key, "— server copy not yet loaded; first reconcile will merge it.");
+        return;
+      }
       try {
         await api("delete", { name: nameOf(name, key) });
         const m = readMeta();
@@ -167,6 +183,7 @@
       const out = await folder.clear();
       // wipe the whole folder server-side so a boot reconcile cannot resurrect keys
       schedule(name, "\u0000clear", async () => {
+        if (!firstSyncDone) { console.warn("[rpge saves] skipped pre-sync server wipe of", name); return; }
         try {
           const { entries } = await api("list", {});
           const mine = entries.filter((e) => {
@@ -189,6 +206,7 @@
   // ---- boot reconcile (server <-> local) ----
   async function reconcile(origKv) {
     const { entries } = await api("list", {});
+    for (const e of entries) serverNames.add(e.name);
     const tombs = {};
     const data = {};
     for (const e of entries) {
@@ -257,6 +275,7 @@
       }
     }
     writeMeta(meta);
+    firstSyncDone = true; // from here on, ordinary writes push through as user intent
   }
 
   const TOMB_SUFFIX_LEN = ".tomb.json".length;
@@ -276,6 +295,9 @@
     });
     try { window.root.kv = proxy; } catch (e) { console.warn("[rpge saves] could not install mirrored kv:", e); return; }
     if (!isEnabled()) { console.info("[rpge saves] server-side saves disabled by config."); return; }
+    // Know the server's entry names as early as possible — pre-sync writes must not clobber
+    // server data the browser hasn't loaded yet (see the gate above pushValue/pushDelete).
+    api("list", {}).then(({ entries }) => { for (const e of entries) serverNames.add(e.name); }).catch(() => {});
     // Reconcile shortly after boot so the app's own reads see server data; failures are
     // non-fatal (the game keeps working on IndexedDB alone).
     const go = () => reconcile(origKv)
