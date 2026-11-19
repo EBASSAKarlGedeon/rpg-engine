@@ -11607,9 +11607,14 @@ function bioLayoutHtml(fields, value, attr = "field") {
 function portraitHtml(npc, size) {
   const isImg = /^(data:|https?:|blob:)|\.(jpe?g|png|gif|webp|avif|svg)(\?|$)/i.test(npc.portrait || "");
   const style = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.47)}px`;
+  // An EMPTY portrait renders the stock placeholder as a real <img> — the raw path text
+  // (the old fallback) showed as giant escaped text in every panel that sizes this box.
+  if (!String(npc.portrait || "").trim()) {
+    return `<img class="npc-portrait" src="src/images/portrait-placeholder.webp" alt="" style="${style}">`;
+  }
   return isImg
     ? `<img class="npc-portrait" src="${npc.portrait}" alt="" style="${style}">`
-    : `<div class="npc-portrait" style="${style}">${esc(npc.portrait || "src/images/portrait-placeholder.webp")}</div>`;
+    : `<div class="npc-portrait" style="${style}">${esc(npc.portrait)}</div>`;
 }
 
 function importanceTag(npc) {
