@@ -47,6 +47,40 @@ against the real server: first-run bridge auto-on, real profile list, Test call 
 one REAL streamed generation through the OpenRouter profile, image bridge still 13/13 (one real
 Recraft generation). Screenshots `rpge-heavy/f081-imports-live.png`, `f082/f083-aimodel-*.png`.
 
+## [rpge-patch 018] followups (2026-11-21)
+
+**1. Test call false positive** (`ai-provider.js`): the server wraps upstream failures in an
+HTTP 200 with an `{error:{message}}` payload in non-stream mode — the Test button now treats
+that as a failure instead of green-lighting a broken profile.
+
+**2. Import page tab strip** (`loreweaver-import.js`, harness `check-imports.js`): the three
+import flows are now internal tabs — "👤 Personas → Heroes" / "🎭 Cards → NPCs" / "📖 World
+Info → Lore" — styled after the Worlds header action strip (`.hm-act`): boxed, letterspaced
+uppercase, accent border + tint on the active tab. The target-world selector is shared by the
+cards and books tabs (hidden on the personas tab); the last tab is remembered
+(`rpge.importTab`). Logic unchanged — everything renders regardless of the active tab.
+
+**3. Fresh-browser worlds dropdown stayed empty** (`loreweaver-import.js`): the storage
+shim's one-shot `rpge-saves-synced` event can fire BEFORE the page mounts its listener. The
+page now polls up to 6× (6 s apart, only while the world select is still empty).
+
+**4. CRITICAL: fresh browsers were zeroing the server's worlds index** (`loreweaver-storage.js`):
+the write-through mirror pushed the app's BOOT-time writes (e.g. the worlds/index normalization
+pass on an empty fresh browser) BEFORE the first reconcile had pulled anything — every fresh
+boot overwrote the server's worlds index with an empty list, and real devices kept
+conflict-copying against it (the live index ping-ponged to empty; 22 conflict copies piled up).
+Fix: until the first reconcile completes, pushes/deletes/wipes are only allowed for keys the
+server does NOT have; keys the server has are left alone and merged by the reconcile (local
+boot writes land as conflict copies, server wins into the browser — lossless in both
+directions). The server's live index was restored from the newest conflict copy
+(conflict-1795124459634, 5 entries). Verified: a fresh boot against the real server no longer
+touches the server index and fills the dropdown (world `w-2158c5195cf6` selected).
+
+**5. Wrapper syntax error** (Loreweaver-side `index.js`): a stray unclosed
+`function onButtonClick() {` left by the 018 edit broke the whole extension parse — the
+drawer panel AND the wand entry both vanished silently. Rule: `node --check` every wrapper
+edit before deploy (an extension that fails to parse disappears without any UI error).
+
 # Tracked patches to `app/src/`
 
 The port rule is to keep `app/src/` untouched so upstream updates drop in. Every deviation
