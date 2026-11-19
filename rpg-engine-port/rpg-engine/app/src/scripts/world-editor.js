@@ -3852,6 +3852,9 @@ function renderCover(v) {
     const story = [
       M.narrativeVibe ? "NARRATIVE VIBE:\n" + String(M.narrativeVibe).slice(0, 1200) : "",
       M.scenario ? "SCENARIO:\n" + String(M.scenario).slice(0, 2000) : "",
+      // [rpge-patch 007] The card-import canon (description+personality → worldDescription) so a
+      // generated NPC fits the world's actual rules/cast, not just its lorebook tail.
+      M.worldDescription ? "WORLD DESCRIPTION (always true — canon about the world and its people):\n" + String(M.worldDescription).slice(0, 3000) : "",
       firstStart ? "STARTING SCENE:\n" + String(firstStart).slice(0, 2000) : ""
     ].filter(Boolean).join("\n\n");
     const existing = (M.npcs || []).map((n) => String(n.name || "").trim()).filter(Boolean).join(", ");
@@ -3911,7 +3914,9 @@ function renderCover(v) {
     const lore = lorebookToText(M.lorebook, { activation: null, capChars: 1500 });
     const story = [
       M.narrativeVibe ? "NARRATIVE VIBE:\n" + String(M.narrativeVibe).slice(0, 800) : "",
-      M.scenario ? "SCENARIO:\n" + String(M.scenario).slice(0, 1200) : ""
+      M.scenario ? "SCENARIO:\n" + String(M.scenario).slice(0, 1200) : "",
+      // [rpge-patch 007] card-import canon, so generated stats/trackers match the world's rules
+      M.worldDescription ? "WORLD DESCRIPTION (canon):\n" + String(M.worldDescription).slice(0, 1200) : ""
     ].filter(Boolean).join("\n\n");
     return { story, lore };
   }

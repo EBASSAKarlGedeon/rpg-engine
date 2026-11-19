@@ -204,3 +204,22 @@ touch dead code only). With the bridge ON and no `contextTokens` saved yet: 1638
 
 **Revert:** restore `mock-seed.js` + `stickers/` from history; remove the bridge branch in
 `routeUsesExternal`, `bridgedInputCap`, `bridgedCap`, the `cap` threading, and the config field.
+
+## [rpge-patch 007] Generator prompts see the worldDescription canon (NPC / stat / tracker generators)
+
+**Files:** `src/scripts/world-editor.js` (2 spots).
+
+**Why (user request 2026-11-18):** the ✨ Generate NPC / stat / tracker prompts were built from
+vibe + scenario + lorebook — after patch 004 the card-import canon lives in `worldDescription`,
+so generated cast matched the lorebook tail but not the card's actual rules (first try would
+need manual fixing on imported worlds).
+
+**Change:** `npcAiInstruction` adds `WORLD DESCRIPTION (always true — canon about the world and
+its people):` (first 3000 chars) after the scenario; `defAiContext` (shared by the stat and
+tracker generators) adds a 1200-char canon slice. The lorebook converter (`loreAiInstruction`) is
+deliberately untouched — the raw pasted text IS its source.
+
+**Impact when bridge is off:** none — prompts only get longer when a world actually has a
+worldDescription (patch 004 worlds); old worlds generate exactly as before.
+
+**Revert:** delete the two `M.worldDescription ? … : ""` lines.
