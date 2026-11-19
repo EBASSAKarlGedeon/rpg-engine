@@ -7861,7 +7861,10 @@ function duetEl(a, b) {
   const w = document.createElement("div");
   w.className = "msg duet";
   if (shared) {
-    w.innerHTML = `<div class="duet-cols shared">${sideHead(sideData[0])}${sideHead(sideData[1])}</div>` +
+    w.innerHTML = `<div class="duet-cols shared">` +
+      `<div class="duet-side">${sideHead(sideData[0])}</div>` +
+      `<div class="duet-side">${sideHead(sideData[1])}</div>` +
+      `</div>` +
       `<div class="duet-text">${renderText(a.text)}</div>`;
   } else {
     w.innerHTML = `<div class="duet-cols">` +

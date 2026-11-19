@@ -315,7 +315,7 @@
   /* [rpge-patch 011] dual-NPC speech: two speakers in one beat, side by side — circular portraits
      above each half's name + line. A shared line (both say the same words) shows one text
      centered under both portraits. Halves stack vertically on narrow screens. */
-  .msg.duet { margin: 4px 0; }
+  .msg.duet { margin: 4px 0; flex-direction: column; align-items: stretch; }
   .msg.duet .duet-cols { display: flex; gap: 16px; width: 100%; max-width: 82%; margin: 0 auto; justify-content: center; }
   .msg.duet .duet-side { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; }
   .msg.duet .duet-avatar { width: 76px; height: 76px; flex: 0 0 76px; display: flex; align-items: center; justify-content: center; font-size: 40px; background: var(--panel2); cursor: pointer; }
