@@ -12,6 +12,7 @@ export function initUpdateCheck() {
   let checking = false;
   let lastCheck = Date.now();
   const readStamp = async () => {
+    if (typeof window.generatorName !== "string" || !window.generatorName) return null;
     try {
       const r = await fetch("/api/getGeneratorStats?name=" + window.generatorName + "&_=" + Date.now(), { cache: "no-store" }).then((x) => x.json());
       const t = r && r.data && r.data.lastEditTime;

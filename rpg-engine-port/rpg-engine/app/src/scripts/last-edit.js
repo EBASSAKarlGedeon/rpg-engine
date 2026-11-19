@@ -24,7 +24,7 @@ export function initLastEdit() {
     }
   };
   paint();
-  if (stamp === null) {
+  if (stamp === null && typeof window.generatorName === "string" && window.generatorName) {
     fetch("/api/getGeneratorStats?name=" + window.generatorName + "&_=" + Date.now(), { cache: "no-store" }).then((x) => x.json()).then((r) => {
       const t = r && r.data && r.data.lastEditTime;
       if (typeof t === "number") {

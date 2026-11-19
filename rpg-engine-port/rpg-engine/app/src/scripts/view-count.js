@@ -13,6 +13,7 @@ function formatCompact(n) {
 }
 
 async function fetchViewText() {
+  if (typeof window.generatorName !== "string" || !window.generatorName) return "";
   try {
     const res = await fetch("/api/getGeneratorStats?name=" + window.generatorName).then((r) => r.json());
     if (res && res.status === "success" && res.data) return formatCompact(res.data.views || 0);
