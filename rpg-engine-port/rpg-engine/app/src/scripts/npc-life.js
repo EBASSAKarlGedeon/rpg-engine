@@ -580,7 +580,8 @@ export class NpcLifeSystem {
       "- GOAL always advances: rewrite it every tick as one specific present-tense step (verb + object + place/person — e.g. not 'Transport the magazine home' but 'Haggling with the binder in Lantern Row over the magazine\\'s torn sleeve'). FORBIDDEN shape: keeping the same base sentence and appending a parenthetical — 'Transport the magazine home safely (currently scrambling…)' is a failure, not progress. Fold the new step INTO the goal itself.",
       "- Never restate or closely paraphrase the current goal or any previous mini-goal — each tick must move the thread to a genuinely new beat (a step taken, a complication faced, or a completion plus follow-up). Do not stretch one errand with endless micro-setbacks (dropped page, torn sleeve, one more delay). A thread alive 3+ ticks MUST conclude this tick — delivered, failed, handed off, or abandoned — with a non-null event recording the outcome, and the new goal must be a genuinely DIFFERENT want. Completions always count as worth remembering: set event, never null. Routine no-memory continuation is the rare exception (at most 1-2 ticks in a row), never the norm — and even then the goal text still advances to the next concrete step.",
       "- EVENT is recorded ONLY when something WORTH REMEMBERING happened — the same bar as a story memory: relationship changes, promises made or broken, secrets revealed or learned (and by whom), alliances, betrayals, grudges, injuries, deaths, important items gained/lost/given, discoveries, lasting changes. SKIP trivial routine: errands, shopping, chores, pure atmosphere, minor chit-chat. A routine tick sets event to null — the NPC still lived it (the goal carries it), but no memory is recorded.",
-      `- When recorded, the event is 1–2 factual sentences, past tense, third person, using characters' EXACT names as listed. It may involve ONE other listed NPC (a meeting, argument, favor, shared chore) — or no one. Never invent a non-listed character. The hero stays off-stage: no scenes with them — a brief mention is fine when it grows naturally from the NPC's own goal, but keep the focus on what the NPC did.`,
+      `- When recorded, the event is 1–2 factual sentences, past tense, third person, using characters' EXACT names as listed. It may involve ONE other listed NPC (a meeting, argument, favor, shared chore) — or no one. Never invent a non-listed character. The hero stays off-stage: no scenes with them — a brief mention is fine when it grows naturally from the NPC's own goal, but keep the focus on what the NPC did. If you mark importance 3, state the commitment's exact terms — who does what for whom, any price or condition — as close to VERBATIM as possible.`,
+      "- importance: rate the event 1–3. 2 = a normal event (the default). 3 = a COMMITMENT whose exact wording matters — a promise, deal, oath, vow, bargain, contract, ultimatum, binding agreement — recorded as close to verbatim as possible; such entries are kept word-for-word and are ALWAYS available to the storyteller. 1 = minor color worth keeping only when its topic comes up (a small purchase, a passing remark worth remembering). Importance 3 is RARE — only when terms were actually agreed between named characters.",
       "- Never contradict the dossier or their private memories. Never reveal secrets verbatim — act on them (a debt shapes behavior) without quoting them.",
       "- WHERE: report each NPC's current whereabouts — a short place phrase (\"at the Rusty Anchor tavern\", \"on the road to Millford\", \"home at the cottage\"). Everyone is somewhere: always fill it, carrying their last place forward when they haven't moved. NPCs you place together in one event share the same whereabouts.",
       "- CROSS-TALK: an \"Others' recent doings\" line is another NPC's activity involving this one — the seed of an NPC-NPC scene. They may meet, argue, trade, apologize, or follow up on exactly that thread (still one listed partner per event). Don't force it: if the thread doesn't fit, leave it — and the NPC only reacts if they'd plausibly know (told directly, overheard, saw it themselves).",
@@ -592,7 +593,7 @@ export class NpcLifeSystem {
       pool ? `\nKNOWN FACES (exact spellings — the only valid interaction partners):\n${pool}` : "",
       `\nOFF-SCREEN NPCS:\n${blocks}`,
       "",
-      'Reply with ONLY a JSON object, no prose and no code fence, with exactly this shape: {"lives": [{"name": "<exact NPC name>", "goal": "<updated mini-goal, always>", "where": "<short current whereabouts, always>", "event": "<1–2 past-tense sentences, or null when nothing worth remembering happened>", "with": ["<other exact name>"], "triggers": ["kw1", "kw2", "kw3"]}]}'
+      'Reply with ONLY a JSON object, no prose and no code fence, with exactly this shape: {"lives": [{"name": "<exact NPC name>", "goal": "<updated mini-goal, always>", "where": "<short current whereabouts, always>", "event": "<1–2 past-tense sentences, or null when nothing worth remembering happened>", "importance": <1|2|3>, "with": ["<other exact name>"], "triggers": ["kw1", "kw2", "kw3"]}]}'
     ].filter((s) => s !== "").join("\n");
   }
 
@@ -690,7 +691,7 @@ export class NpcLifeSystem {
           "",
           `REJECTED:\n${bits}`,
           "",
-          'Reply with ONLY a JSON object, no prose and no code fence: {"lives": [{"name": "<exact NPC name>", "goal": "<rewritten mini-goal>", "where": "<short current whereabouts>", "event": "<1–2 past-tense sentences, or null>", "with": [], "triggers": ["kw1", "kw2"]}]}'
+          'Reply with ONLY a JSON object, no prose and no code fence: {"lives": [{"name": "<exact NPC name>", "goal": "<rewritten mini-goal>", "where": "<short current whereabouts>", "event": "<1–2 past-tense sentences, or null>", "importance": <1|2|3>, "with": [], "triggers": ["kw1", "kw2"]}]}'
         ].join("\n");
         let raw2 = "";
         try {
@@ -711,7 +712,10 @@ export class NpcLifeSystem {
               if (!L || typeof L !== "object") return L;
               const nm = String(L.name || "").trim();
               const fix = nm ? fixedBy.get(nm.toLowerCase()) : null;
-              return fix || L;
+              if (!fix) return L;
+              // The repair pass rewrites goals; carry the original tick's importance unless
+              // the repair supplied its own (a lost rating would demote a verbatim commitment).
+              return fix.importance == null && L.importance != null ? Object.assign({}, fix, { importance: L.importance }) : fix;
             });
           }
         }
@@ -801,12 +805,19 @@ export class NpcLifeSystem {
       // the model's spelling — a lowercase "mira" must still record as "Mira"
       // so the owner gate and the NPC Memory tab match it exactly.
       const ownerRaw = [entry.name, ...withNames].join(", ");
+      // [rpge-patch 012] the tick classifies its own events on the roll-up's 1–3 scale:
+      // 3 = verbatim commitment (promise/deal/oath — pinned, so the feed's always-3 tier
+      // guarantees its exact terms survive context pressure), 2 = normal event (default),
+      // 1 = minor color. The rating rides the same fields the roll-up writes, so the
+      // existing feed/pruning logic treats both identically — no engine changes needed.
+      const importance = [1, 2, 3].includes(Math.round(Number(L.importance)) || 0) ? Math.round(Number(L.importance)) : 2;
       const mem = {
         text: event,
         turn: turnNow,
         owner: normalizeOwner(ownerRaw, hero),
         triggers,
-        pinned: false,
+        pinned: importance === 3,
+        importance,
         ts: Date.now()
       };
       state.memories.auto.push(mem);
