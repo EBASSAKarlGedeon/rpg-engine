@@ -24,6 +24,19 @@ function getProvider(id) {
   return PROVIDERS.find((p) => p.id === id) || PROVIDERS[0];
 }
 
+// First-run default: the bridge is ALWAYS on (profiles-only AI, no off state). Without
+// this a fresh browser's calls would 404 until the user opened Settings once. The shim
+// resolves an empty profileId to Loreweaver's selected profile, so zero config works.
+(function bridgeDefaultOn() {
+  try {
+    const B = window.LoreweaverBridge;
+    if (!B || typeof B.read !== "function") return;
+    const c = B.read() || {};
+    if (c.enabled === true) return;
+    B.write(Object.assign({ enabled: true, usePreset: true, contextTokens: 16384 }, c));
+  } catch (e) {}
+})();
+
 function readStore() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem(CFG_KEY) || "{}") || {}; } catch (e) {}
