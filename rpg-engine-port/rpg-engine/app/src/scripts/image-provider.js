@@ -26,7 +26,7 @@ const IMAGE_PROVIDERS = [
   // Server-backed (rpge-patch 017): images ride the Loreweaver bridge to
   // /api/openrouter/image/generate — the server holds the OpenRouter key, so no
   // key row, no base URL, and it only exists when the bridge shim is loaded.
-  { id: "loreweaver", label: "Loreweaver (server)", model: "openai/gpt-5-image-mini" },
+  { id: "loreweaver", label: "Loreweaver (server)", model: "recraft/recraft-v4.1-flash-v2:free" },
 ];
 
 // The Loreweaver bridge shim (app/shims/loreweaver-bridge.js) is present only
@@ -270,7 +270,7 @@ async function loreweaverGenImage(prompt, opts = {}) {
   try {
     out = await b.api("/api/openrouter/image/generate", body);
   } catch (e) {
-    throw new Error("Loreweaver server image error: " + ((e && e.message) || e));
+    throw new Error("Loreweaver server image error: " + ((e && e.message) || e) + " — if it says 400, the Loreweaver server may be missing its OpenRouter key (Loreweaver → API keys → OpenRouter).");
   }
   const b64 = out && out.image;
   if (!b64) throw new Error("No image returned — try again.");
@@ -525,12 +525,13 @@ export function routedGenImage(prompt, opts) {
 // Free key check (no generation cost, so no spend): OpenAI's model list needs
 // auth, while OpenRouter's is public — its dedicated key-info endpoint is used.
 export async function testImageConnection(baseUrl, key, provider) {
-  // Loreweaver (server): no key involved — a free probe of the server's image
-  // model list proves the bridge AND the server's OpenRouter key are alive.
+  // Loreweaver (server): no key involved — the free probe rides the server's
+  // /credits endpoint, which NEEDS the server's OpenRouter key, so it really
+  // validates end to end without spending a generation.
   if (provider === "loreweaver") {
     const b = bridgeApi();
     if (!b) throw new Error("Loreweaver server bridge is not connected.");
-    await b.api("/api/openrouter/models/image", {});
+    await b.api("/api/openrouter/credits", {});
     return true;
   }
   const base = String(baseUrl || "").replace(/\/+$/, "");

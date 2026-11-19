@@ -502,7 +502,7 @@ chat-side Image Generation extension uses — see `docs/IMAGE-GENERATION.md` §4
 "prompt + dimensions in, image out" so a future patch can point it at any other server-backed
 backend (e.g. a local ComfyUI) without touching the engine again (option C).
 
-- `image-provider.js`: new provider preset (`loreweaver`, default model `openai/gpt-5-image-mini`);
+- `image-provider.js`: new provider preset (`loreweaver`, default model `recraft/recraft-v4.1-flash-v2:free` (user choice — the OpenAI image mini tier gets expensive at NPC-portrait volume));
   `bridgeApi()` gate; `loreweaverGenImage` (aspect 1:1 / 2:3 / 3:2 mapped from the call's
   resolution opt; refs/tier opts ignored like on the Perchance path); `loreweaverImageModels()`
   fed by `/api/openrouter/models/image`; `testImageConnection` probes the models list for free;
@@ -517,7 +517,17 @@ backend (e.g. a local ComfyUI) without touching the engine again (option C).
   verifies bridge + server key without spending a generation; the "No key saved yet" status and
   the keyless fallback warning are suppressed for it.
 
-Verified by `tools/imgbridge-test.js` (13 logic checks against the deployed module: fresh
-defaults with/without bridge, active-provider fallback, close blocker both ways, generate body
-shape + aspect mapping both ways, route-off fallback, test-connection, model list shape,
-bridge-down throw).
+Server-key requirement found during live testing: `/api/openrouter/image/generate` reads the
+STANDARD `api_key_openrouter` server secret (the user's keys were profile-bound custom secrets),
+so the working OpenRouter key was registered into the standard slot via `/api/secrets/write` —
+a one-time server-side setup, key never leaves the server.
+
+`testImageConnection` probes `/api/openrouter/credits` (free, but REQUIRES the server key) so the
+Test button really validates end to end; generation errors hint at the missing-key cause.
+
+Verified by `tools/imgbridge-test.js` (13 live checks against the deployed module + REAL server:
+config/active/close-blocker behavior, free test probe, 74 real image models listed, one REAL
+generation on `recraft/recraft-v4.1-flash-v2:free` (user choice — the OpenAI image mini tier gets
+expensive at NPC-portrait volume), route-off + bridge-down paths). Settings UI verified by
+screenshot: server provider selected, Base URL/key rows hidden, model datalist populated,
+Portraits/Scene/Other all ON.
