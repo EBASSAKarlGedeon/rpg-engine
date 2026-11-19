@@ -6242,6 +6242,15 @@ async function runGmTurn({ history, actionText, opening = false, insertIndex = n
   refreshHeroPos();
   refreshCtxMeter();
   return replyMsgs;
+  } catch (turnErr) {
+    // [rpge-patch 016] A failed turn (provider outage, dead key, exhausted credits, a hung
+    // bridge) must not die as a silent unhandled rejection: the player would just see their
+    // action sit unanswered with no clue why. Toast one human sentence, then re-throw so the
+    // existing recovery paths (empty send retries the unanswered action; re-roll/edit/delete)
+    // keep working exactly as before.
+    try { notify("⚠ The narrator didn't answer this turn — " + ((turnErr && turnErr.message) || turnErr) + ". Send an empty message to retry it."); } catch (_) {}
+    render();
+    throw turnErr;
   } finally {
     generating = false;
     setLoading(false);
