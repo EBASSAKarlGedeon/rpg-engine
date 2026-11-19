@@ -7,6 +7,8 @@
 
 import { normalizeLorebook, splitKeywords } from "./lorebook.js";
 import { isExpTrackerDef, EXP_DEFAULT_MAX, NPC_TRIGGER_FIELDS, NPC_TRIGGER_DEFAULT_FIELD } from "./trackers.js";
+// [rpge-patch 010] default for the per-world prose-pack toggle (absent = on for old saves).
+import { proseRulesOn } from "./prose-rules.js";
 import { safeStorageRead, withStorageRetry, isStorageError } from "./storage-errors.js";
 
 export const WORLD_FORMAT = "mno-world";
@@ -252,6 +254,7 @@ export function emptyWorld(id = "Basic RPG", name = "Basic RPG") {
   return {
     meta: { id, name, description: "", author: "", authorId: "", tags: [], nsfw: false, commentsOff: false, remix: null, cover: "", authorNotes: "", createdAt: "", updatedAt: "" },
     narrativeVibe: "",
+    proseRules: true,
     lorebook: [],
     scenario: "",
     start: "",
@@ -536,6 +539,8 @@ export function normalizeWorld(obj) {
     // [rpge-patch 004] ST-card provenance: the card's description+personality canon. Always fed
     // to the GM (see rp-engine.js) — separate from meta.description, which is card display text.
     worldDescription: str(obj.worldDescription),
+    // [rpge-patch 010] per-world prose-pack toggle (default ON; explicit false = off).
+    proseRules: proseRulesOn(obj),
     lorebook: normalizeLorebook(obj.lorebook),
     scenario: str(obj.scenario),
     start: starts[0] ? starts[0].text : str(obj.start),
@@ -646,6 +651,7 @@ export function worldToFile(world) {
     meta: fileMeta,
     narrativeVibe: world.narrativeVibe,
     worldDescription: world.worldDescription || "",
+    proseRules: proseRulesOn(world),
     lorebook: (world.lorebook || []).map((e) => ({
       title: e.title || "", type: e.type || "lore", activation: e.activation || "always",
       keywords: e.keywords || [], content: e.content || ""

@@ -585,7 +585,7 @@ function bankedOffscreenEvents(state, rosterSet) {
 }
 
 export class RPEngine {
-  constructor({ genText, promptText, loreEntries = [], scenarioText = "", startText = "", startMode = "prompt", vibeText = "", worldDescriptionText = "", trackerDefs = [], npcTrackerDefs = [], statDefs = [], worldNpcs = [], checkIncludeTrackers = false, checkIncludeNpcTrackers = false, checkTrackerKeys = [], checkNpcTrackerKeys = [], useCheckInstruction = false, checkInstruction = "" }) {
+  constructor({ genText, promptText, loreEntries = [], scenarioText = "", startText = "", startMode = "prompt", vibeText = "", worldDescriptionText = "", proseRulesText = "", trackerDefs = [], npcTrackerDefs = [], statDefs = [], worldNpcs = [], checkIncludeTrackers = false, checkIncludeNpcTrackers = false, checkTrackerKeys = [], checkNpcTrackerKeys = [], useCheckInstruction = false, checkInstruction = "" }) {
     this.lastInstruction = null;
     this.lastTrackerInstruction = null;
     this.lastNpcTrackerInstruction = null;
@@ -615,6 +615,9 @@ export class RPEngine {
     // [rpge-patch 004] The world's canon description (card description+personality on imports) —
     // always fed, sits between the vibe and the premise so general canon precedes premise canon.
     this.worldDescriptionText = worldDescriptionText;
+    // [rpge-patch 010] The world's prose pack (anti-slop writing rules) — a per-world toggle;
+    // empty string = off (nothing fed, byte-identical to pre-patch prompts).
+    this.proseRulesText = proseRulesText;
     this.trackerDefs = trackerDefs; // from the loaded world
     this.npcTrackerDefs = npcTrackerDefs; // from the loaded world — per-NPC tracked values (see README §6.3.1)
     this.statDefs = statDefs; // from the loaded world (player-owned attributes)
@@ -756,6 +759,9 @@ export class RPEngine {
     // [rpge-patch 004] World description — always-canon about the world and its people, fed every
     // reply before the premise so the GM reads general canon first.
     if (this.worldDescriptionText) parts.push("WORLD DESCRIPTION (always true — canon about the world and its people):\n" + sub(this.worldDescriptionText));
+    // [rpge-patch 010] Prose pack — static per world, so it rides the STABLE prefix cluster (before
+    // the premise) and stays prefix-cache friendly across turns. See prose-rules.js.
+    if (this.proseRulesText) parts.push("WRITING RULES (prose pack — binding for every reply):\n" + this.proseRulesText);
     // The current location tracker value (used by the lore selector and the SURROUNDINGS section).
     const curLocTxt = locationValue(this.trackerDefs, getCurrentTrackers(state, this.trackerDefs));
     // The same "what is the scene about" text the lorebook matcher uses, used to decide which NPCs

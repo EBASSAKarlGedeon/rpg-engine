@@ -9,6 +9,7 @@
 // instruction they would send, without spending a generation.
 
 import { loadWorld } from "./world.js";
+import { PROSE_RULES_TEXT, proseRulesOn } from "./prose-rules.js";
 import { RPEngine } from "./rp-engine.js";
 import { MemorySystem, MEMORY_EVERY_TURNS, MEMORY_FEED_CAP, MEMORY_NAME_FEED_CAP } from "./memory-system.js";
 import { LORE_FEED_CAP, STOPWORDS } from "./lorebook.js";
@@ -309,7 +310,7 @@ function makeEngineFactory(world, promptText) {
     genText, promptText,
     loreEntries: world.lorebook, scenarioText: world.scenario, startText: world.start,
     startMode: world.startMode,
-    vibeText: world.narrativeVibe, worldDescriptionText: world.worldDescription || "", trackerDefs: world.trackerDefs, npcTrackerDefs: world.npcTrackerDefs,
+    vibeText: world.narrativeVibe, worldDescriptionText: world.worldDescription || "", proseRulesText: proseRulesOn(world) ? PROSE_RULES_TEXT : "", trackerDefs: world.trackerDefs, npcTrackerDefs: world.npcTrackerDefs,
     statDefs: world.statDefs, worldNpcs: world.npcs,
     checkIncludeTrackers: world.statsCfg && world.statsCfg.checkIncludeTrackers,
     checkIncludeNpcTrackers: world.statsCfg && world.statsCfg.checkIncludeNpcTrackers,

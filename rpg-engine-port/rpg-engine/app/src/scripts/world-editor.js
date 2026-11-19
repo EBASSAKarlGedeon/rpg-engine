@@ -2210,6 +2210,7 @@ function renderCover(v) {
       <div class="ce-sec"><span>world story</span></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("narrative vibe", "The GM’s narrative tone, injected into every reply.")}</span><textarea id="ceVibe" rows="2" placeholder="e.g. funny, adventure, exploration."></textarea></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("world description", "Canon about the world and its people, fed to the GM every reply — unlike the Basics tab’s Description, which is only card display text.")}</span><textarea id="ceWDesc" rows="5" placeholder="The world and its people as the GM must always know them."></textarea></div>
+      <div class="ce-fld"><div class="ce-start-head"><span>${infoTipLabelHtml("prose rules", "Anti-slop writing rules fed to the GM every reply: direct statements, shown emotion, no therapy-speak, no echoing, no plot armor. Per world; default on.")}</span><button type="button" class="ui-sw" id="ceProse" role="switch" aria-checked="true" aria-label="Prose rules"><span class="sw-track"><span class="sw-knob"></span></span></button></div></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("scenario", "Permanent premise, injected into every GM reply. {{user}} becomes the hero’s name.")}</span><textarea id="ceScen" rows="6" placeholder="The world's standing premise — what is always true of this story."></textarea></div>
       <div class="ce-sec ce-lore-head"><span>openings</span>
         <span class="ce-lore-toolbtns">
@@ -2226,6 +2227,11 @@ function renderCover(v) {
     v.querySelector("#ceVibe").value = M.narrativeVibe || "";
     v.querySelector("#ceWDesc").value = M.worldDescription || "";
     v.querySelector("#ceScen").value = M.scenario || "";
+    const proseBtn2 = v.querySelector("#ceProse");
+    if (proseBtn2) {
+      paintSwitch(proseBtn2, M.proseRules !== false);
+      proseBtn2.onclick = () => { M.proseRules = M.proseRules === false ? true : false; paintSwitch(proseBtn2, M.proseRules !== false); markTouched(); };
+    }
     v.querySelector("#ceVibe").oninput = (e) => { M.narrativeVibe = e.target.value; markTouched(); };
     v.querySelector("#ceWDesc").oninput = (e) => { M.worldDescription = e.target.value; markTouched(); };
     v.querySelector("#ceScen").oninput = (e) => { M.scenario = e.target.value; markTouched(); };
@@ -2247,6 +2253,7 @@ function renderCover(v) {
       <div class="ce-sec"><span>world story</span></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("narrative vibe", "The GM’s narrative tone, injected into every reply.")}</span><textarea id="ceVibe" rows="2" placeholder="e.g. funny, adventure, exploration."></textarea></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("world description", "Canon about the world and its people, fed to the GM every reply — unlike the Basics tab’s Description, which is only card display text.")}</span><textarea id="ceWDesc" rows="5" placeholder="The world and its people as the GM must always know them."></textarea></div>
+      <div class="ce-fld"><div class="ce-start-head"><span>${infoTipLabelHtml("prose rules", "Anti-slop writing rules fed to the GM every reply: direct statements, shown emotion, no therapy-speak, no echoing, no plot armor. Per world; default on.")}</span><button type="button" class="ui-sw" id="ceProse" role="switch" aria-checked="true" aria-label="Prose rules"><span class="sw-track"><span class="sw-knob"></span></span></button></div></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("scenario", "Permanent premise, injected into every GM reply. {{user}} becomes the hero’s name.")}</span><textarea id="ceScen" rows="6" placeholder="The world's standing premise — what is always true of this story."></textarea></div>
       <div class="ce-sec ce-lore-head"><span>opening</span>
         <span class="ce-lore-toolbtns">
@@ -2259,6 +2266,11 @@ function renderCover(v) {
     v.querySelector("#ceVibe").value = M.narrativeVibe || "";
     v.querySelector("#ceWDesc").value = M.worldDescription || "";
     v.querySelector("#ceScen").value = M.scenario || "";
+    const proseBtn1 = v.querySelector("#ceProse");
+    if (proseBtn1) {
+      paintSwitch(proseBtn1, M.proseRules !== false);
+      proseBtn1.onclick = () => { M.proseRules = M.proseRules === false ? true : false; paintSwitch(proseBtn1, M.proseRules !== false); markTouched(); };
+    }
     v.querySelector("#ceVibe").oninput = (e) => { M.narrativeVibe = e.target.value; markTouched(); };
     v.querySelector("#ceWDesc").oninput = (e) => { M.worldDescription = e.target.value; markTouched(); };
     v.querySelector("#ceScen").oninput = (e) => { M.scenario = e.target.value; markTouched(); };

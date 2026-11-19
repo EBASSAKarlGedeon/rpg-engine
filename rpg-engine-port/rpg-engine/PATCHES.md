@@ -298,3 +298,18 @@ had already blanked the digest, so the load path's `migrateDigest` couldn't rebu
 stored history. **Fix:** `normalizeMemories` passes `history` through raw; the load path assigns
 `d.memories.history = normalizeHistory(...)` (sanitize on load). Playwright-verified: a session
 with a migrated seed + snippets keeps its full stack across repeated opens.
+
+### [rpge-patch 010] Prose Rules Pack (feature A of the preset-port plan)
+Distilled the anti-slop writing layer from four community presets (Freaky Frankenstein 5.4 "Ground
+Prose Rules", Pura Director 16, Sola V4, Voyage) into a single ~560-token block (`prose-rules.js`):
+direct statements over corrective negation (bad/good examples), show-don't-label emotion, every
+spoken line is an action with nothing owed back (0% dialogue turns valid), anti-omniscient NPCs,
+no plot armor, cliché ban-list, idiolect rhythm.
+- New module `app/src/scripts/prose-rules.js` (`PROSE_RULES_TEXT`, `proseRulesOn`).
+- World field `proseRules` (default ON; explicit false = off — old saves stay on).
+- `rp-engine.js`: constructor param `proseRulesText`; `buildContext` feeds `WRITING RULES (prose
+  pack — binding for every reply)` in the STABLE prefix cluster (after WORLD DESCRIPTION, before
+  WORLD PREMISE) so the prefix cache keeps working.
+- `main.js` + `context-budget.js` engine factories pass `proseRulesOn(world) ? PROSE_RULES_TEXT : ""`.
+- `world-editor.js`: "prose rules" switch on the Story tab (both single- and multi-opening renderers).
+Off = byte-identical to pre-patch prompts. Logic-tested (on/off/position/toggle), suites green.
