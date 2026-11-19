@@ -357,3 +357,43 @@ match, first dropped under context pressure, losing the exact terms of the deal.
 
 **Verification.** `node --check` clean; check-imports / check-bridge / check-storage green;
 pushed `e7f5cb4..d1c1631` and pulled into the deployed AppData clone.
+
+---
+
+## [rpge-patch 013] Open threads get teeth — ages, OVERDUE, d20 resurfacing (2026-11-20, `d2c8ab2`+`c1c17b6`)
+
+**Problem.** The roll-up's open-threads list (Memory panel → Threads) tracked narrative debt as
+plain strings: no age, nothing forced a payoff, threads could rot forever, and the player had no
+idea how long each had been dangling. Feature C from the preset-port plan (Chekhov's Gun),
+rebuilt as an upgrade to the EXISTING list (no parallel system).
+
+**Changes.**
+- `memory-system.js` roll-up write: threads are now `{text, from, lastFired}`. `from` is the
+  ENGINE-stamped planted turn (never read from the model): a thread already in the list keeps its
+  original stamp (matched case-insensitively by text), a brand-new one is stamped with the current
+  turn, a legacy string thread starts aging NOW. Kept threads preserve `lastFired` through
+  refreshes (`c1c17b6`).
+- `rp-engine.js` buildContext: the OPEN THREADS feed shows each age ("planted N turns ago"; ≥10 =
+  OVERDUE: visible progress or resolution soon). A pending `state.threadDirective` whose
+  targetTurn === current turn injects "DIRECTION — OPEN THREAD RESURFACES NOW: <thread>" —
+  targetTurn-matched, so same-turn re-rolls re-inject and later turns never see it.
+- `main.js`: `pickFireThread` (oldest thread past `from`, age ≥ 3, not fired within 4 turns);
+  fire roll inside saveAndMaybeMemory's roll-up block (once per roll-up): d20 threshold scales
+  with age (young 18+, ≥5 turns 14+, ≥10 10+, ≥16 8+); on a hit the thread gets `lastFired`, the
+  player gets a 🎯 toast, and the NEXT turn's context carries the directive. Gated by
+  `world.threadFires !== false` (default ON; OFF = no directives ever created, prompts otherwise
+  unchanged). Stale directives cleared when their window passes.
+- `main.js` normalize: threads → validated `{text, from, lastFired}` (legacy strings stamped with
+  the session's current turn); `threadDirective` validated (text + numeric targetTurn) else null.
+- Threads panel: age chips, a 🎯 "resurfaces next turn" badge on the scheduled thread, add-thread
+  stamps the current turn, editing keeps the original stamp.
+- `world.js` + `world-editor.js`: `threadFires` world field (default ON) + "Thread dice" switch
+  in the World Editor Story tab (both renderers), beside the prose-rules switch.
+
+**Verification.** 18/18 logic tests against the REAL modules (roll-up stamping incl. kept/new/
+legacy threads; feed ages + OVERDUE + directive injection/target-turn scoping/re-roll; fire
+picker age+cooldown+oldest-first; normalize compat). check-imports/bridge/storage green.
+Playwright (kv-stub recipe): seeded 22-turn session — Threads panel shows "planted 18 turns
+ago" / "planted 3 turns ago" / legacy stamped "planted 0 turns ago", and the seeded directive
+shows the 🎯 badge (f060-threads.png). Test-infra note: session `turn` is message-derived
+(seed enough action messages or the turn counter resets to the message count).
