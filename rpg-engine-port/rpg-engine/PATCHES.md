@@ -290,3 +290,11 @@ before (empty history block). The digest no longer feeds even for old saves (mig
 
 **Revert:** delete memory-history.js + its imports/wiring; restore the digest block in rp-engine.js;
 remove the importance lines in memory-system.js. (Large surface — easiest to keep.)
+
+### [rpge-patch 009 hotfix `406145b`] `normalizeMemories` dropped `history` on every load
+**Problem:** the layer stack vanished the SECOND time a session was opened — the digest-migration
+had already blanked the digest, so the load path's `migrateDigest` couldn't rebuild it, and
+`normalizeMemories` (which returns a fresh `{auto, manual, digest}` object) silently discarded the
+stored history. **Fix:** `normalizeMemories` passes `history` through raw; the load path assigns
+`d.memories.history = normalizeHistory(...)` (sanitize on load). Playwright-verified: a session
+with a migrated seed + snippets keeps its full stack across repeated opens.
