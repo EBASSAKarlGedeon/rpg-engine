@@ -851,6 +851,14 @@ export class RPEngine {
     if (tdir && typeof tdir.targetTurn === "number" && tdir.targetTurn === (state.turn || 0)) {
       parts.push(`DIRECTION — OPEN THREAD RESURFACES NOW: the thread "${tdir.text}" forces its way back into this beat (an event, a messenger, a consequence, a reminder — something the player did not schedule). Weave it into this reply.`);
     }
+    // [rpge-patch 014] scene-dice directive (feature E): the co-director's d20 scheduled a nudge
+    // for THIS beat (see scene-dice.js + saveAndMaybeMemory). Same targetTurn contract as the
+    // thread directive: re-rolls of the same turn re-inject, later turns never see it. Separate
+    // system by design — thread dice fire tracked debt; scene dice inject unscheduled direction.
+    const sdir = state.sceneDirective;
+    if (sdir && typeof sdir.targetTurn === "number" && sdir.targetTurn === (state.turn || 0)) {
+      parts.push(`DIRECTION — SCENE DICE (${sdir.kind || "nudge"}): ${sdir.text}. Weave it into this reply.`);
+    }
 
     // The session NPCs currently in play — named in the recent chat/action/location, or seen
     // within the last few turns (pinning and high importance do NOT count as presence — see

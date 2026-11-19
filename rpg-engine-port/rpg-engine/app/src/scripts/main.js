@@ -7,6 +7,7 @@ import { historyDue, runHistorySnippet, invalidateFromTurn, migrateDigest, norma
 import { NpcLifeSystem, NPC_LIFE_EVERY_TURNS, NPC_LIFE_MAX_PER_TICK, NPC_LIFE_MIN_OFFSCREEN_TURNS, NPC_LIFE_HISTORY_MAX, NPC_LIFE_GOAL_MAX_CHARS, NPC_LIFE_WHERE_MAX_CHARS } from "./npc-life.js";
 import { NpcSystem, mergePersona, npcLinkRuleFor } from "./npc-system.js";
 import { PROSE_RULES_TEXT, proseRulesOn } from "./prose-rules.js";
+import { SCENE_DICE_EVERY_TURNS, sceneNudgeFor, sceneDiceToast } from "./scene-dice.js";
 import { RPEngine } from "./rp-engine.js";
 import { defaultCharacter } from "./character.js";
 import { initialTrackers, getCurrentTrackers as deriveCurrentTrackers, parseTrackerBlock, extractTrackers, stripBlockForDisplay, groupByRow, liveMax, isDead, lifeTracker, levelTracker, expTracker, locationTracker, locationValue, isQuestTrackerDef, foldNpcTrackers, initialNpcTrackers, npcEnabledKeysFromFlags, npcTriggerMatches, npcTriggerSubject, stripDisabledNpcTrackerKeys, purgeNpcTrackerKeys, purgeNpcTrackerHistory, extractNpcTrackers, parseNpcTrackerBlock, npcTrackerBlockText, applyLevelUpBackstop, applyTrackerModes, applyTrackerStartOverrides } from "./trackers.js";
@@ -117,6 +118,7 @@ let defaultWorld = null; // the bundled world flagged `default` in the manifest 
 let currentWorldId = null; // which world's content is loaded into the globals/engine right now
 let currentWorldName = ""; // its display name, so a session can remember the world it was built in
 let currentWorldThreadFires = true; // [rpge-patch 013] the bound world's thread-dice toggle (world.threadFires !== false)
+let currentWorldSceneDice = true; // [rpge-patch 014] the bound world's scene-dice toggle (world.sceneDice !== false)
 let engineImagePrompt = ""; // the engine's default scene-image prompt (image-prompt.md) — the fallback for worlds without imagePrompt
 let worldNameCache = {}; // worldId -> display name, for session rows (refreshed with the library)
 let gameTitle = "MNO RPG ENGINE"; // the page title from $meta (the chat topbar brand + the nav brand)
@@ -280,6 +282,8 @@ function newSession(id, worldId, startId) {
     latestSituationTurn: 0, // session turn the situation was last (re)written — roll-up or hand-edit; ages the GM's LATEST SITUATION line without touching the roll-up cadence
     openThreads: [], // one-line "what is in motion right now" items ({text, from, lastFired} since patch 013), refreshed by each memory roll-up and always fed to the GM
     threadDirective: null, // [rpge-patch 013] {text, targetTurn} — the d20 thread-dice verdict for the NEXT turn's GM context (see saveAndMaybeMemory)
+    sceneDirective: null, // [rpge-patch 014] {kind, text, targetTurn} — the scene-dice co-director nudge for the NEXT turn
+    lastSceneDiceTurn: 0, // [rpge-patch 014] scene-dice cadence cursor (fires every SCENE_DICE_EVERY_TURNS turns)
     map: null,       // { loc, status: 'loading'|'ready'|'error', pois, hero, scale, at } — surroundings of current location (scale: indoor|local|outdoor)
     mapCache: {},    // per-region POI cache: { [regionKey]: { pois, hero, scale } }
     surroundingsLoc: null, // last region whose SURROUNDINGS were fed to the GM (avoids re-feeding)
@@ -773,6 +777,7 @@ function applyWorld(world, startId, customStartText) {
   currentWorldId = world.meta.id;
   currentWorldName = world.meta.name || "";
   currentWorldThreadFires = world.threadFires !== false; // [rpge-patch 013]
+  currentWorldSceneDice = world.sceneDice !== false; // [rpge-patch 014]
   vibeText = world.narrativeVibe.trim();
   scenarioText = world.scenario;
   // The session's chosen opening (startId) when it still exists, else the world's first —
@@ -10072,6 +10077,10 @@ function normalize(d, opts) {
   }
   if (!d.threadDirective || typeof d.threadDirective !== "object" || typeof d.threadDirective.text !== "string" || typeof d.threadDirective.targetTurn !== "number") d.threadDirective = null;
   else d.threadDirective = { text: d.threadDirective.text.trim().slice(0, 160), targetTurn: Math.floor(d.threadDirective.targetTurn) };
+  // [rpge-patch 014] scene-dice directive + cadence cursor, validated like the thread directive
+  if (!d.sceneDirective || typeof d.sceneDirective !== "object" || typeof d.sceneDirective.text !== "string" || typeof d.sceneDirective.targetTurn !== "number") d.sceneDirective = null;
+  else d.sceneDirective = { kind: String(d.sceneDirective.kind || "nudge").slice(0, 40), text: d.sceneDirective.text.trim().slice(0, 200), targetTurn: Math.floor(d.sceneDirective.targetTurn) };
+  if (typeof d.lastSceneDiceTurn !== "number" || d.lastSceneDiceTurn < 0) d.lastSceneDiceTurn = 0;
   if (!d.map) d.map = null;
   if (!d.mapCache || typeof d.mapCache !== "object") d.mapCache = {};
   delete d.worldMap;
@@ -13039,6 +13048,22 @@ async function saveAndMaybeMemory() {
           state.threadDirective = { text: cand.text, targetTurn: state.turn + 1 };
           try { notify("🎯 An old thread resurfaces next turn: " + (cand.text.length > 70 ? cand.text.slice(0, 67) + "…" : cand.text)); } catch (_) {}
         }
+      }
+    }
+    // [rpge-patch 014] Scene-direction dice (feature E) — the co-director's d20, INDEPENDENT of
+    // the thread dice: every SCENE_DICE_EVERY_TURNS turns (the moment a scene can go stale),
+    // client-side d20; a hit schedules a one-line direction nudge for the NEXT turn's GM context
+    // (scene-dice.js table: complication / twist / arrival / pressure / quiet beat; ~half the
+    // rolls are calm). Same targetTurn contract as the thread directive. Per-world toggle
+    // (world.sceneDice, default ON; OFF = no nudges ever scheduled).
+    if (state.sceneDirective && (state.sceneDirective.targetTurn || 0) <= state.turn) state.sceneDirective = null;
+    if (currentWorldSceneDice && ((state.turn || 0) - (state.lastSceneDiceTurn || 0)) >= SCENE_DICE_EVERY_TURNS) {
+      state.lastSceneDiceTurn = state.turn || 0;
+      const roll = 1 + Math.floor(Math.random() * 20);
+      const nudge = sceneNudgeFor(roll);
+      if (nudge) {
+        state.sceneDirective = { kind: nudge.kind, text: nudge.text, targetTurn: (state.turn || 0) + 1 };
+        try { notify("🎲 Scene dice (d20 " + roll + "): " + sceneDiceToast(roll) + " next turn"); } catch (_) {}
       }
     }
   }

@@ -2212,6 +2212,7 @@ function renderCover(v) {
       <div class="ce-fld"><span>${infoTipLabelHtml("world description", "Canon about the world and its people, fed to the GM every reply — unlike the Basics tab’s Description, which is only card display text.")}</span><textarea id="ceWDesc" rows="5" placeholder="The world and its people as the GM must always know them."></textarea></div>
       <div class="ce-fld"><div class="ce-start-head"><span>${infoTipLabelHtml("prose rules", "Anti-slop writing rules fed to the GM every reply: direct statements, shown emotion, no therapy-speak, no echoing, no plot armor. Per world; default on.")}</span><button type="button" class="ui-sw" id="ceProse" role="switch" aria-checked="true" aria-label="Prose rules"><span class="sw-track"><span class="sw-knob"></span></span></button></div></div>
       <div class="ce-fld"><div class="ce-start-head"><span>${infoTipLabelHtml("thread dice", "The engine’s d20 detonator for open threads: old unresolved threads can roll their way back into the story as a forced beat. Per world; default on.")}</span><button type="button" class="ui-sw" id="ceThreads" role="switch" aria-checked="true" aria-label="Thread dice"><span class="sw-track"><span class="sw-knob"></span></span></button></div></div>
+      <div class="ce-fld"><div class="ce-start-head"><span>${infoTipLabelHtml("scene dice", "The co-director’s d20: every 15 turns a low roll nudges the scene — a complication, a twist, an arrival, rising pressure, or a quiet beat. Per world; default on.")}</span><button type="button" class="ui-sw" id="ceScene" role="switch" aria-checked="true" aria-label="Scene dice"><span class="sw-track"><span class="sw-knob"></span></span></button></div></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("scenario", "Permanent premise, injected into every GM reply. {{user}} becomes the hero’s name.")}</span><textarea id="ceScen" rows="6" placeholder="The world's standing premise — what is always true of this story."></textarea></div>
       <div class="ce-sec ce-lore-head"><span>openings</span>
         <span class="ce-lore-toolbtns">
@@ -2238,6 +2239,11 @@ function renderCover(v) {
       paintSwitch(thBtn2, M.threadFires !== false);
       thBtn2.onclick = () => { M.threadFires = M.threadFires === false ? true : false; paintSwitch(thBtn2, M.threadFires !== false); markTouched(); };
     }
+    const scBtn2 = v.querySelector("#ceScene");
+    if (scBtn2) {
+      paintSwitch(scBtn2, M.sceneDice !== false);
+      scBtn2.onclick = () => { M.sceneDice = M.sceneDice === false ? true : false; paintSwitch(scBtn2, M.sceneDice !== false); markTouched(); };
+    }
     v.querySelector("#ceVibe").oninput = (e) => { M.narrativeVibe = e.target.value; markTouched(); };
     v.querySelector("#ceWDesc").oninput = (e) => { M.worldDescription = e.target.value; markTouched(); };
     v.querySelector("#ceScen").oninput = (e) => { M.scenario = e.target.value; markTouched(); };
@@ -2261,6 +2267,7 @@ function renderCover(v) {
       <div class="ce-fld"><span>${infoTipLabelHtml("world description", "Canon about the world and its people, fed to the GM every reply — unlike the Basics tab’s Description, which is only card display text.")}</span><textarea id="ceWDesc" rows="5" placeholder="The world and its people as the GM must always know them."></textarea></div>
       <div class="ce-fld"><div class="ce-start-head"><span>${infoTipLabelHtml("prose rules", "Anti-slop writing rules fed to the GM every reply: direct statements, shown emotion, no therapy-speak, no echoing, no plot armor. Per world; default on.")}</span><button type="button" class="ui-sw" id="ceProse" role="switch" aria-checked="true" aria-label="Prose rules"><span class="sw-track"><span class="sw-knob"></span></span></button></div></div>
       <div class="ce-fld"><div class="ce-start-head"><span>${infoTipLabelHtml("thread dice", "The engine’s d20 detonator for open threads: old unresolved threads can roll their way back into the story as a forced beat. Per world; default on.")}</span><button type="button" class="ui-sw" id="ceThreads" role="switch" aria-checked="true" aria-label="Thread dice"><span class="sw-track"><span class="sw-knob"></span></span></button></div></div>
+      <div class="ce-fld"><div class="ce-start-head"><span>${infoTipLabelHtml("scene dice", "The co-director’s d20: every 15 turns a low roll nudges the scene — a complication, a twist, an arrival, rising pressure, or a quiet beat. Per world; default on.")}</span><button type="button" class="ui-sw" id="ceScene" role="switch" aria-checked="true" aria-label="Scene dice"><span class="sw-track"><span class="sw-knob"></span></span></button></div></div>
       <div class="ce-fld"><span>${infoTipLabelHtml("scenario", "Permanent premise, injected into every GM reply. {{user}} becomes the hero’s name.")}</span><textarea id="ceScen" rows="6" placeholder="The world's standing premise — what is always true of this story."></textarea></div>
       <div class="ce-sec ce-lore-head"><span>opening</span>
         <span class="ce-lore-toolbtns">
@@ -2282,6 +2289,11 @@ function renderCover(v) {
     if (thBtn1) {
       paintSwitch(thBtn1, M.threadFires !== false);
       thBtn1.onclick = () => { M.threadFires = M.threadFires === false ? true : false; paintSwitch(thBtn1, M.threadFires !== false); markTouched(); };
+    }
+    const scBtn1 = v.querySelector("#ceScene");
+    if (scBtn1) {
+      paintSwitch(scBtn1, M.sceneDice !== false);
+      scBtn1.onclick = () => { M.sceneDice = M.sceneDice === false ? true : false; paintSwitch(scBtn1, M.sceneDice !== false); markTouched(); };
     }
     v.querySelector("#ceVibe").oninput = (e) => { M.narrativeVibe = e.target.value; markTouched(); };
     v.querySelector("#ceWDesc").oninput = (e) => { M.worldDescription = e.target.value; markTouched(); };
