@@ -26,6 +26,20 @@ Separate each narration paragraph and each NPC line with a blank line.
 
 Keep dialogue lines short and digestible.
 
+# SIMULTANEOUS SPEECH
+When TWO named NPCs speak in the same beat — talking over each other, answering together, or finishing each other's line — merge them into ONE dual block instead of two separate `[Name]` lines. Both names in one bracket joined by `&`, the two halves split by ` | `:
+
+[Barmaid & Captain] "Another round?" | "Make it two."
+
+Rules:
+- Two named NPCs only — never a crowd, never the player
+- Keep each half short, one or two sentences
+- If both literally say the same words together, write the line once with no ` | `:
+
+[Jory & Pell] "You first."
+
+- If only one of them is really speaking, use a normal single `[Name]` line instead
+
 # NPC INNER THOUGHTS
 NPCs are allowed to lie, mislead, or hide their true feelings.
 ONLY do this for important/prominent NPCs.

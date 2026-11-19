@@ -6281,7 +6281,7 @@ function makeStreamBubble() {
       if (!wrap.isConnected) t.appendChild(wrap);
       row.innerHTML = "";
       try {
-        for (const m of liveStreamMsgs(acc)) row.appendChild(partEl(m));
+        appendPartsGrouped(row, liveStreamMsgs(acc));
       } catch (err) {
         // Never let one unparseable message blank the stream — fall back to plain text.
         console.error("stream part render failed:", err);
@@ -7546,7 +7546,7 @@ function renderTurn(turn, idx, isLatest = false, choicesLive = false) {
   if (isEditing && editing.which === "gm") {
     gmWrap.appendChild(editEl(turn, idx, "gm"));
   } else {
-    for (const m of visible) gmWrap.appendChild(partEl(m));
+    appendPartsGrouped(gmWrap, visible);
     // Tracker change chips are display-only (snapshots stay intact) and gated by the
     // Story panel's "Show tracker changes" toggle — same pattern as inner thoughts.
     const showTrk = !state.settings || state.settings.showTrackerChanges !== false;
@@ -7837,6 +7837,64 @@ function npcLinkIconHtml(m) {
   if (st.kind === "linked") return `<button class="npc-link" type="button" title="Linked to ${esc(st.canon.name)} — change">🔗</button>`;
   if (st.kind === "unlinked" && (st.auto || st.rule)) return `<button class="npc-link off" type="button" title="Unlinked — change">🔗</button>`;
   return "";
+}
+
+// [rpge-patch 011] Dual-NPC speech block: two adjacent duet-flagged npc lines render side by
+// side — circular portrait over each speaker's name and line (partEl's own avatar/name/click
+// behavior, doubled). A shared line (both halves say the same words) shows one text centered
+// under both portraits. Presentational only: the messages are ordinary npc lines.
+function duetEl(a, b) {
+  const sideData = [a, b].map((m) => {
+    const heroSpeaker = isHeroSpeaker(m.name);
+    const npc = heroSpeaker ? {} : (npcForSpeaker(m.name, m.npcKey, m.npcUnlinked) || {});
+    const av = heroSpeaker
+      ? ((state.character && state.character.portrait) || "src/images/portrait-placeholder.webp")
+      : (npc.portrait || "src/images/portrait-placeholder.webp");
+    const avHtml = /^(data:|https?:|blob:)|\.(jpe?g|png|gif|webp|avif|svg)(\?|$)/i.test(av) ? `<img src="${av}">` : `<span>${av}</span>`;
+    const title = heroSpeaker ? "Open your Hero panel" : `Open ${esc((npc && npc.name) || m.name)}'s profile`;
+    return { m, avHtml, title };
+  });
+  const sideHead = ({ m, avHtml, title }) =>
+    `<div class="avatar duet-avatar" title="${title}">${avHtml}</div>` +
+    `<div class="name npc-name duet-name" title="${title}">${esc(m.name)}${!isHeroSpeaker(m.name) ? npcLinkIconHtml(m) : ""}</div>`;
+  const shared = String(a.text || "").trim() === String(b.text || "").trim();
+  const w = document.createElement("div");
+  w.className = "msg duet";
+  if (shared) {
+    w.innerHTML = `<div class="duet-cols shared">${sideHead(sideData[0])}${sideHead(sideData[1])}</div>` +
+      `<div class="duet-text">${renderText(a.text)}</div>`;
+  } else {
+    w.innerHTML = `<div class="duet-cols">` +
+      `<div class="duet-side">${sideHead(sideData[0])}<div class="text">${renderText(a.text)}</div></div>` +
+      `<div class="duet-side">${sideHead(sideData[1])}<div class="text">${renderText(b.text)}</div></div>` +
+      `</div>`;
+  }
+  // Same click targets as a normal npc bubble: portrait/name opens the speaker's panel or profile.
+  w.querySelectorAll(".duet-avatar, .duet-name").forEach((el) => {
+    const i = el.closest(".duet-side") ? [...w.querySelectorAll(".duet-side")].indexOf(el.closest(".duet-side")) : 0;
+    el.onclick = (e) => openSpeakerFromChat(sideData[i].m, e.currentTarget);
+  });
+  w.querySelectorAll(".npc-link").forEach((btn) => {
+    const i = btn.closest(".duet-side") ? [...w.querySelectorAll(".duet-side")].indexOf(btn.closest(".duet-side")) : 0;
+    btn.onclick = (e) => { e.stopPropagation(); openNpcLinkMenu(btn, sideData[i].m); };
+  });
+  return w;
+}
+
+// [rpge-patch 011] Render a turn's parts, pairing adjacent duet-flagged npc lines into side-by-side
+// blocks. Used by BOTH the final turn render and the live stream, so a duet looks the same
+// mid-stream as it does in the finished transcript. Unpaired duet flags (a half whose sibling
+// hasn't streamed in yet) fall through to a normal npc bubble until the pair completes.
+function appendPartsGrouped(container, msgs, interactive = false) {
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (m && m.role === "npc" && m.duet && msgs[i + 1] && msgs[i + 1].role === "npc" && msgs[i + 1].duet) {
+      container.appendChild(duetEl(m, msgs[i + 1]));
+      i++;
+    } else {
+      container.appendChild(partEl(m, interactive));
+    }
+  }
 }
 
 function partEl(m, interactive = false) {

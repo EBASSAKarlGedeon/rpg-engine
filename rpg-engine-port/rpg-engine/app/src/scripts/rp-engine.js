@@ -1339,7 +1339,14 @@ export class RPEngine {
     if (m.role === "direct") return m.kind === "advance" ? "SCENE TRANSITION (the player skipped ahead — a new scene began here)" : `NARRATION DIRECTIVE (OOC): ${m.text}`;
     // Linked lines feed their canonical roster name (the bubble itself keeps the GM's variant
     // spelling) so the model keeps learning the canon form and owners stay unified.
-    if (m.role === "npc") return `[${m.npcKey || m.name}] ${m.text}`;
+    // [rpge-patch 011] Duet halves re-feed as their ORIGINAL combined `[A & B] ...` line (the
+    // first half carries it in `duetFull`; the second half feeds nothing) so the model keeps
+    // learning the dual-speaker format from its own past turns instead of un-learning it.
+    if (m.role === "npc") {
+      if (m.duetFull) return m.duetFull;
+      if (m.duet) return "";
+      return `[${m.npcKey || m.name}] ${m.text}`;
+    }
     if (m.role === "thought") return `[${m.npcKey || m.name} inner] ${m.text}`;
     if (m.role === "choice") return ""; // engine directive, not story — never fed to the GM
     return String(m.text || "").trim().replace(/^(?:GM|PLAYER|OOC|META|SYSTEM)\s*:\s*/i, "");
@@ -2298,6 +2305,29 @@ export class RPEngine {
         const rawName = m[1].trim();
         const innerMatch = rawName.match(/^inner\s*:\s*(.+)$/i) || rawName.match(/^(.+?)\s+inner$/i);
         const name = innerMatch ? innerMatch[1].trim() : rawName;
+        // [rpge-patch 011] Dual-NPC speech: `[A & B] line A | line B` — two named NPCs speaking in
+        // the same beat (talking over each other, answering together). Emits TWO adjacent npc
+        // messages flagged `duet` — every downstream consumer (speaker presence, trackers, NPC
+        // links, memory) still sees ordinary npc lines; only the renderer pairs them into a
+        // side-by-side block (duetEl). No ` | ` split = one shared line said together (the same
+        // text under both portraits, rendered once). The first half carries `duetFull`, the
+        // ORIGINAL combined line, which fmt() re-feeds so the model keeps learning the format.
+        const duoMatch = innerMatch ? null : rawName.match(/^(.+?)\s*&\s*(.+)$/);
+        if (duoMatch) {
+          const nA = duoMatch[1].trim(), nB = duoMatch[2].trim();
+          const oocName = (n) => /^(ooc|meta|system|out of character)$/i.test(n);
+          if (nA && nB && !oocName(nA) && !oocName(nB)) {
+            flush();
+            const full = m[2];
+            const sep = full.indexOf(" | ");
+            const tA = (sep >= 0 ? full.slice(0, sep) : full).trim();
+            const tB = sep >= 0 ? full.slice(sep + 3).trim() : tA;
+            const duetFull = `[${rawName}] ${full}`;
+            if (tA) out.push({ role: "npc", name: nA, text: tA, duet: true, duetFull });
+            if (tB) out.push({ role: "npc", name: nB, text: tB, duet: true });
+            continue;
+          }
+        }
         if (/^(ooc|meta|system|out of character)$/i.test(name)) continue;
         if (innerMatch) {
           flush();

@@ -313,3 +313,21 @@ no plot armor, cliché ban-list, idiolect rhythm.
 - `main.js` + `context-budget.js` engine factories pass `proseRulesOn(world) ? PROSE_RULES_TEXT : ""`.
 - `world-editor.js`: "prose rules" switch on the Story tab (both single- and multi-opening renderers).
 Off = byte-identical to pre-patch prompts. Logic-tested (on/off/position/toggle), suites green.
+
+### [rpge-patch 011] Dual-NPC simultaneous speech (side-by-side duet)
+Feature from the dual-NPC idea backlog (user request 2026-11-20). Two named NPCs speaking in the
+same beat render as ONE side-by-side block: circular portrait over each speaker's name and line.
+- Prompt: `narrator-prompt.md` gains a SIMULTANEOUS SPEECH section — `[A & B] line A | line B`
+  (halves split on ` | `); both saying the same words = one line with no ` | `.
+- Parser (`rp-engine.js` parseGmOutput): `[A & B] ...` emits TWO adjacent npc messages flagged
+  `duet` (first half carries `duetFull`, the original combined line). Zero downstream changes —
+  speaker presence, trackers, NPC links and memory still see ordinary npc lines. Empty halves are
+  dropped, so a streaming pair degrades to a normal bubble until the sibling arrives. `inner` and
+  OOC names never become duets. fmt() re-feeds the pair as its original `[A & B]` line so the
+  model keeps learning the format from its own past turns.
+- Renderer (`main.js`): `appendPartsGrouped` (used by BOTH the final turn render and the live
+  stream) pairs adjacent duet-flagged lines into `duetEl` — portraits/names/lines side by side,
+  same avatar + name click targets (profile / link menu) as normal bubbles; identical texts
+  collapse to one shared line under both portraits.
+- `styles.css`: `.msg.duet` block styles; halves stack vertically under 640px.
+Presentational only — no save-schema or state changes. Logic-tested (6 parser cases), suites green.
