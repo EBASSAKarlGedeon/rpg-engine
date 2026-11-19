@@ -1121,7 +1121,10 @@ export class MemorySystem {
         const prevFrom = new Map();
         for (const p of (Array.isArray(state.openThreads) ? state.openThreads : [])) {
           const k = (typeof p === "string" ? p : (p && p.text)).trim().toLowerCase();
-          if (k && !prevFrom.has(k)) prevFrom.set(k, (p && typeof p === "object" && typeof p.from === "number" && p.from >= 0) ? p.from : null);
+          if (k && !prevFrom.has(k)) prevFrom.set(k, {
+            from: (p && typeof p === "object" && typeof p.from === "number" && p.from >= 0) ? p.from : null,
+            lastFired: (p && typeof p === "object" && typeof p.lastFired === "number" && p.lastFired >= 0) ? p.lastFired : null
+          });
         }
         const nowTurn = state.turn || 0;
         state.openThreads = threadList
@@ -1130,8 +1133,8 @@ export class MemorySystem {
           .slice(0, 8)
           .map((t) => {
             const k = t.toLowerCase();
-            const prev = prevFrom.has(k) ? prevFrom.get(k) : null;
-            return { text: t, from: (prev != null) ? prev : nowTurn, lastFired: null };
+            const prev = prevFrom.get(k) || null;
+            return { text: t, from: (prev && prev.from != null) ? prev.from : nowTurn, lastFired: prev ? prev.lastFired : null };
           });
       }
 
