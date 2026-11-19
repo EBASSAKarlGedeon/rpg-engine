@@ -1,3 +1,52 @@
+## [rpge-patch 018] Loreweaver-native text AI + Import page in the landing nav
+
+**Date:** 2026-11-21 — **user decision:** the "keep mnomno's code intact" rule is RETIRED from
+this patch on. The engine fuses into Loreweaver step by step; Perchance AI and the BYOK
+providers were removed for TEXT generation (Image Generation keeps its Perchance source — its
+fusion is a later step).
+
+**Files:** `src/scripts/ai-provider.js` (rewrite), `src/scripts/main.js`, `src/scripts/loreweaver-import.js`
+(new, ported from the deleted `app/loreweaver-import.html`), `shims/loreweaver-bridge.js`
+(settings-cache invalidator), `index.html`-level pages (`loreweaver-bridge.html`, `cheap-model.html`
+deleted), Loreweaver wrapper `index.js`, inner wrapper `index.js`, `src/scripts/context-budget.js`
+(one user-visible note), tools `check-bridge.js` / `check-imports.js` / `heavy-import.js` / `shot-imports.js`.
+
+**What changed:**
+- Text AI is Loreweaver-ONLY: every `genText` call posts to `<origin>/v1/chat/completions`, the
+  bridge shim maps it to a Connection Manager profile (endpoint/model/key all server-side).
+  Perchance AI + OpenAI/DeepSeek/OpenRouter/Ollama, their key forms, model/baseUrl fields,
+  sampling sliders, thinking toggles and the route-off→Perchance fallback are GONE. A route
+  switched off now means THE JOB DOES NOT RUN (no silent fallback); route defaults are all-ON.
+  `mno.aiProvider` collapses to loreweaver; the shared key map (`mno.aiProviderKey`) stays for
+  the IMAGE providers.
+- Settings → AI Model section rebuilt as the bridge page's true home: MAIN PROFILE dropdown
+  (fed from `/api/settings/get`, ↻ refresh; first run auto-picks Loreweaver's SELECTED profile),
+  per-job profiles (10 roles incl. cheap), profile-preset sampling checkbox, context budget,
+  Test call (must fail on the server's 200-wrapped upstream errors — no false positives).
+  The AI Model close-gate is removed (nothing to revert to).
+- First-run default written at module load: `rpge.loreweaverBridge` = `{enabled:true, usePreset:true,
+  contextTokens:16384}` — the shim resolves an empty profileId to Loreweaver's selected profile,
+  so a fresh browser generates with zero setup.
+- Import page: the floating `loreweaver-import.html` overlay is now the landing page
+  "Import from Loreweaver" (nav item right under Adventures, `#imports` hash). Logic ported
+  verbatim; the `rpge-worlds-changed` listener no longer remounts the landing while this page is
+  mounted (the old full remount tore the page down mid-import once it shared the app's frame).
+- Deep links: `window.rpgEngine.open(target)` postMessages `{rpgeOpen:true, target}`; the app
+  re-enters the landing from a chat (session kept) and mounts `imports` / opens Settings on
+  `settings/aimodel`. `#settings/<section>` hashes work directly too. The Loreweaver extension's
+  Bridge → AI Model settings, Imports → Import page; the two floating overlay pages are removed.
+- `cheap-model.html` deleted (its cheap slot is a per-job profile). `perchance-limits.js` kept
+  ONLY as dead constants for fit-measure fallback paths (isPerchanceAIFor is always false).
+- Consequence: standalone serving (python http.server) shows the game but cannot generate.
+
+**Verified:** `tools/check-bridge.js` (mock Loreweaver server: profile dropdown, selected-profile
+default, test call parameterized by profile, role matrix, preset sampling, key never leaves the
+server), `tools/check-imports.js` (full import pipeline INSIDE the app frame: personas, card→NPC,
+card→world, book→lorebook, re-import field preservation), `tools/check-overlay.js`, and LIVE
+against the real server: first-run bridge auto-on, real profile list, Test call ✓/✖ by profile,
+one REAL streamed generation through the OpenRouter profile, image bridge still 13/13 (one real
+Recraft generation). Screenshots `rpge-heavy/f081-imports-live.png`, `f082/f083-aimodel-*.png`.
+
 # Tracked patches to `app/src/`
 
 The port rule is to keep `app/src/` untouched so upstream updates drop in. Every deviation
