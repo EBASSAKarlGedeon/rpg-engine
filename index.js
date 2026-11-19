@@ -12,7 +12,6 @@ const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 // The full game app lives inside the port folder. Its own wrapper (rpg-engine-port/rpg-engine/index.js)
 // adds the floating ⚔ launcher + wand-menu entry + full-screen overlay, and exposes window.rpgEngine.
 
-function onButtonClick() {
 const defaultSettings = {
     enabled: false
 };
