@@ -374,7 +374,10 @@ function openaiGenText(norm, route) {
   const cfg = getAiConfig();
   const preset = getProvider(cfg.provider);
   const key = getAiKey();
-  if (!key && !preset.noKey) throw new Error("No API key saved for " + preset.label + ".");
+  // [rpge-patch 015] When the Loreweaver bridge is enabled the server applies the real API
+  // key (the page never needs one) — don't gate bridged calls on a page-stored key.
+  const bridgeOn = (() => { try { return !!(window.LoreweaverBridge && window.LoreweaverBridge.isEnabled()); } catch (e) { return false; } })();
+  if (!key && !preset.noKey && !bridgeOn) throw new Error("No API key saved for " + preset.label + ".");
   const headers = { "Content-Type": "application/json" };
   if (key) headers.Authorization = "Bearer " + key;
   else if (preset.noKey) headers.Authorization = "Bearer ollama";
