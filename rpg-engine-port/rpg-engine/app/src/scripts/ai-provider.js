@@ -429,6 +429,9 @@ export async function testBridgeConnection() {
     throw new Error(detail);
   }
   const j = await res.json();
+  // The server wraps upstream failures in a 200 with an error payload (non-stream mode) —
+  // treat that as a failure too, or the Test button would green-light a broken profile.
+  if (j && j.error && j.error.message) throw new Error(String(j.error.message).slice(0, 200));
   const txt = j && j.choices && j.choices[0] && j.choices[0].message ? String(j.choices[0].message.content || "").trim() : "";
   return txt || "OK";
 }
