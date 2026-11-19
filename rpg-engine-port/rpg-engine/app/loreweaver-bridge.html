@@ -51,6 +51,12 @@
 
   <p><label><input type="checkbox" id="usePreset" checked> Use the profile's preset sampling
      (temperature, top&nbsp;p, penalties…) when the game doesn't set its own</label></p>
+  <label for="ctx">Context budget (tokens)</label>
+  <input type="number" id="ctx" min="2048" max="200000" step="1024" value="16384">
+  <p class="hint">How much of the model's context window the game may use per prompt — roughly
+     your model's context window (e.g. 32768, 65536, 131072). The game fills this with as much
+     recent story + lore + memories as fits instead of capping itself at Perchance's small
+     window. Too high for the actual model: the API truncates or errors.</p>
   <p><label><input type="checkbox" id="enabled"> Route all model calls through Loreweaver</label></p>
 
   <div class="row">
@@ -125,6 +131,7 @@
     var c = B.read();
     $("enabled").checked = c.enabled === true;
     $("usePreset").checked = c.usePreset !== false;
+    $("ctx").value = (typeof c.contextTokens === "number" && c.contextTokens >= 2048) ? c.contextTokens : 16384;
     fillRoles(c);
     refreshState();
   }
@@ -178,7 +185,7 @@
       var sel = document.getElementById("role-" + id);
       if (sel && sel.value) roles[id] = sel.value;
     });
-    B.write({ enabled: $("enabled").checked, profileId: $("profile").value || null, usePreset: $("usePreset").checked, roles: roles });
+    B.write({ enabled: $("enabled").checked, profileId: $("profile").value || null, usePreset: $("usePreset").checked, contextTokens: Math.min(200000, Math.max(2048, Math.round(Number($("ctx").value) || 16384))), roles: roles });
     fill(); say($("enabled").checked ? "Bridge is ON — calls now go through Loreweaver." : "Bridge is OFF.", "ok");
   };
   $("off").onclick = function () { var c = B.read(); c.enabled = false; B.write(c); fill(); say("Bridge turned off.", "info"); };

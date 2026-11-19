@@ -167,3 +167,40 @@ editing, and an optional no-critical-failure rule. All per-hero, off by default.
 reverts to ["start","bio","avatar","stats","review"] without the new views/handlers; remove
 `applyTrackerModes` + the `modes` args; hero panel reverts to windowOpen-only editing; resolveCheck
 drops `opts`. (Large surface — easiest to keep.)
+
+## [rpge-patch 006] Bridged context budget + dead-community asset cleanup (roadmap 6 & 7)
+
+**Files:** `src/scripts/ai-provider.js`, `src/scripts/rp-engine.js`, `src/scripts/community.js`
+(deletions only), plus our `app/loreweaver-bridge.html` (config page). Deleted files:
+`app/src/stickers/` (~1.4 MB), `app/src/scripts/mock-seed.js`.
+
+**Why:** (7) under the Loreweaver bridge the engine believed it was talking to Perchance — the
+shim still presents as Perchance AI — so every prompt was measured/fit against
+`PERCHANCE_INPUT_CAP = 6976` and the memory/lore feed caps stayed at ×1, massively under-using
+real models' windows. (6) roadmap cleanup: the community backend doesn't exist in Loreweaver, so
+the mock-catalog seeder and the sticker pack are dead weight.
+
+**Change:**
+- `ai-provider.js`: `routeUsesExternal()` returns true for EVERY route while the bridge is
+  enabled (checks `rpge.loreweaverBridge.enabled`) — the existing EXTERNAL_CAP_MULTIPLIER ×2
+  memory/lore caps, external tracker output caps and roll-up behavior light up automatically.
+  New export `bridgedInputCap()`: reads `contextTokens` from the bridge config (clamped
+  2048–200000, default 16384), null when the bridge is off or unreadable → callers keep legacy
+  behavior. Bridge OFF = byte-identical to before.
+- `rp-engine.js`: `bridgedCap()` (cached dynamic import, fails safe to null). `gmFitOpts` —
+  bridged routes now MEASURE and FIT to the configured budget (estimator, no Perchance plugin
+  counter off-Perchance) instead of sending an unmeasured full window; engine-native external
+  providers (bridge off) keep the legacy full-window behavior. `fittedInstruction` and
+  `fitTranscript` take the cap through `fitBase.cap`/`fit.cap` (`limit = cap − GM_FIT_MARGIN`).
+- `loreweaver-bridge.html`: "Context budget (tokens)" number field → `rpge.loreweaverBridge.contextTokens`.
+- `community.js`: removed the 🧪 "Seed mock worlds" button + `runMockSeed`; `mock-seed.js` deleted
+  (nothing else imports it).
+- `app/src/stickers/` deleted: only the dead Tavern/discussion module referenced it; its picker
+  and sticker rendering would 404 images IF a community server were ever configured (it won't be
+  in Loreweaver). Code left untouched — a full discussion.js surgery isn't worth the risk.
+
+**Impact when bridge is off:** none (all new logic gated on `bridgedInputCap() !== null`; deletions
+touch dead code only). With the bridge ON and no `contextTokens` saved yet: 16384 default.
+
+**Revert:** restore `mock-seed.js` + `stickers/` from history; remove the bridge branch in
+`routeUsesExternal`, `bridgedInputCap`, `bridgedCap`, the `cap` threading, and the config field.

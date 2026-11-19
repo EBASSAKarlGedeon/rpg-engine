@@ -3478,7 +3478,6 @@ export async function mountExplore(host, { actionsEl = null, idEl = null } = {})
     <div class="ex-foot">
       <span class="ex-count"></span>
       <button class="mini ok ex-more" type="button" hidden>Load more</button>
-      <button class="mini ex-seed" type="button" hidden title="Editor-only: fill this preview with mock worlds">🧪 Seed mock worlds</button>
     </div>`;
   host.appendChild(page);
   ex.el = page;
@@ -3576,13 +3575,6 @@ export async function mountExplore(host, { actionsEl = null, idEl = null } = {})
 
   page.querySelector(".ex-more").onclick = () => loadExplorePage({ append: true });
   page.querySelector(".ex-nudge-btn").onclick = () => { ex.nudge = 0; setNudge(0); refreshExplore(); };
-  // Dev-only: the editor's server is an ephemeral emulator that starts empty on every load, so give
-  // ourselves a way to fill it. Never shown once the generator is saved (a real catalog is shared).
-  const seedBtn = page.querySelector(".ex-seed");
-  if (window.generatorIsUnsaved) {
-    seedBtn.hidden = false;
-    seedBtn.onclick = () => runMockSeed(seedBtn);
-  }
   paintIdentityButton();
   if (ex.bar) ex.bar.refresh();
 
@@ -3649,36 +3641,6 @@ export function closeExplore() {
   ex.serverIds = new Set();
   ex.nudge = 0;
   disconnect(); // no idle socket is kept while the player is elsewhere
-}
-
-// Editor-only helper behind the 🧪 button. Publishes the mock catalog through the normal RPC
-// surface, then re-reads Explore so the new worlds appear. See src/scripts/mock-seed.js.
-async function runMockSeed(btn) {
-  if (btn.disabled) return;
-  btn.disabled = true;
-  const label = btn.textContent;
-  try {
-    const { seedMockCatalog } = await import("./mock-seed.js");
-    const res = await seedMockCatalog({ onProgress: (m) => { btn.textContent = "🧪 " + m; } });
-    console.log("[mock-seed]", res);
-    let msg;
-    if (res.published) {
-      msg = "🧪 Seeded " + res.published + " world" + (res.published === 1 ? "" : "s") + ".";
-      if (res.hitLimit) msg += " Editor cap reached — reload the preview to add more.";
-    } else if (res.skippedPresent) {
-      msg = "🧪 Already seeded (" + res.skippedPresent + " world" + (res.skippedPresent === 1 ? "" : "s") + " already there).";
-    } else {
-      msg = "🧪 Nothing to seed.";
-    }
-    A().notify(msg, { ms: 6500 });
-    await refreshExplore(true);
-  } catch (e) {
-    console.error("[mock-seed]", e);
-    A().notify("✖ Seed failed: " + e.message, { ms: 5200 });
-  } finally {
-    btn.textContent = label;
-    btn.disabled = false;
-  }
 }
 
 async function refreshExplore(hard = false) {

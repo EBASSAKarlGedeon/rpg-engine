@@ -271,12 +271,31 @@ export function isPerchanceAI() {
 // the route's toggle is off. GM trimming, memory/lore caps and tracker output
 // caps read this (not the global), so a route switched back to Perchance gets
 // Perchance-sized budgets even while other routes stay external.
+// [rpge-patch 006] Loreweaver bridge: when the bridge routes the calls to a real model (a
+// Loreweaver connection profile — whose context window the engine can't know), every route is
+// EXTERNAL: without this the engine would keep measuring/fitting against Perchance's 6,976-token
+// input cap and massively under-use real models. The window itself comes from bridgedInputCap().
 export function routeUsesExternal(route) {
   try {
+    if (bridgedInputCap() !== null) return true;
     if (!AI_ROUTE_IDS.includes(route)) route = "other";
     if (aiActiveProvider() === "perchance") return false;
     return getAiConfig().useExternal[route] !== false;
   } catch (e) { return false; }
+}
+
+// [rpge-patch 006] The input-token budget the engine should assume when the Loreweaver bridge
+// routes calls to a real model. Read from the bridge config (`contextTokens`, set on the bridge
+// page — defaults to 16384 there), clamped to a sane range. Returns null whenever the bridge is
+// OFF or unreadable — callers keep their legacy behavior (Perchance cap, or unmeasured full
+// window for engine-native external providers).
+export function bridgedInputCap() {
+  try {
+    const c = JSON.parse(localStorage.getItem("rpge.loreweaverBridge") || "null");
+    if (!c || c.enabled !== true) return null;
+    const n = Number(c.contextTokens);
+    return Number.isFinite(n) && n >= 2048 ? Math.min(200000, Math.round(n)) : 16384;
+  } catch (e) { return null; }
 }
 
 export function isPerchanceAIFor(route) {

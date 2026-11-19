@@ -360,6 +360,18 @@ async function isPerchanceAIFor(route) {
   return true;
 }
 
+// [rpge-patch 006] The bridged input cap (see bridgedInputCap in ai-provider.js): null when the
+// Loreweaver bridge is off; else the configured context budget. Cached dynamic import like
+// isPerchanceAIFor — fails safe to null (legacy behavior) when the module can't load.
+async function bridgedCap() {
+  try {
+    if (!_isPerchanceProbed) { _isPerchanceProbed = true; _isPerchanceMod = await import("./ai-provider.js"); }
+    const f = _isPerchanceMod && _isPerchanceMod.bridgedInputCap;
+    if (typeof f === "function") return f();
+  } catch (e) {}
+  return null;
+}
+
 // The plugin's exact token counter (same read as the roll-up packing). Null when unknown —
 // callers fall back to the shared char estimator.
 function gmCounter(genText) {
@@ -469,8 +481,8 @@ function transcriptHeader(t) {
 // through subFn (the same {{user}} substitution as the final send), so what is measured
 // is what is sent — no substitution-growth bias, and the GM_FIT_MARGIN only covers
 // counter noise.
-function fitTranscript(parts, idx, t, measure, subFn) {
-  const limit = PERCHANCE_INPUT_CAP - GM_FIT_MARGIN;
+function fitTranscript(parts, idx, t, measure, subFn, cap) {
+  const limit = (cap || PERCHANCE_INPUT_CAP) - GM_FIT_MARGIN;
   const sub = subFn || ((s) => s);
   const render = () => {
     parts[idx] = transcriptHeader(t) + t.lines.join("\n");
@@ -1235,7 +1247,7 @@ export class RPEngine {
       // truncate !== false a direct caller (tests) gets the old measure-and-shorten behavior.
       if (fit && fit.truncate !== false) {
         const measure = fit.measure || ((s) => Math.ceil(String(s).length / PERCHANCE_CHARS_PER_TOKEN));
-        fitTranscript(parts, transcriptIdx, transcript, measure, sub);
+        fitTranscript(parts, transcriptIdx, transcript, measure, sub, fit.cap);
         if (this.lastFit) this.lastFit.truncated = transcript.truncated;
       } else {
         parts[transcriptIdx] = transcriptHeader(transcript) + transcript.lines.join("\n");
@@ -1409,7 +1421,15 @@ export class RPEngine {
   // Per-route: the GM toggle decides — a GM switched back to Perchance trims like Perchance.
   async gmFitOpts(explicit) {
     if (explicit !== undefined) return explicit;
-    if (!(await isPerchanceAIFor("gm"))) return null;
+    if (!(await isPerchanceAIFor("gm"))) {
+      // [rpge-patch 006] Bridged mode: calls go to a real model through the Loreweaver bridge —
+      // measure and fit against the CONFIGURED context budget (bridge page, default 16384)
+      // instead of sending an unmeasured full window. Engine-native external providers (bridge
+      // off) keep the legacy full-window behavior: bridgedCap() is null for them.
+      const cap = await bridgedCap();
+      if (!cap) return null;
+      return { measure: (s) => Math.ceil(String(s).length / PERCHANCE_CHARS_PER_TOKEN), cap };
+    }
     const count = gmCounter(this.genText);
     return { measure: count || ((s) => Math.ceil(String(s).length / PERCHANCE_CHARS_PER_TOKEN)) };
   }
@@ -1428,7 +1448,8 @@ export class RPEngine {
       this.buildContext(state, history, actionText, kind, opening, { ...opts, hybrid, capMultiplier, fit: fitBase ? { ...fitBase, dropTurns, truncate, hookTrim, surroundTrim } : null });
     if (!fitBase) return build(0, false, 0, 0);
     const measure = fitBase.measure || ((s) => Math.ceil(String(s).length / PERCHANCE_CHARS_PER_TOKEN));
-    const limit = PERCHANCE_INPUT_CAP - GM_FIT_MARGIN;
+    // [rpge-patch 006] bridged mode fits to the configured context budget; Perchance keeps its cap.
+    const limit = (fitBase.cap || PERCHANCE_INPUT_CAP) - GM_FIT_MARGIN;
     // Stage 0: surroundings first — the whole map section drops before anything else.
     // Then rotation hooks (hookTrim 1). Relevance hooks are never cut — tested, they're needed.
     // Dossiers + overflow hooks (incl. active-speaker overflow) never trim.
