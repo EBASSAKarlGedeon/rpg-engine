@@ -279,7 +279,12 @@
     // Reconcile shortly after boot so the app's own reads see server data; failures are
     // non-fatal (the game keeps working on IndexedDB alone).
     const go = () => reconcile(origKv)
-      .then(() => console.info("[rpge saves] server-side saves synced."))
+      .then(() => {
+        console.info("[rpge saves] server-side saves synced.");
+        // Tell late-boot pages (import/bridge panels read kv before this lands) so they can
+        // re-render from server data instead of staying on their pre-sync (empty) view.
+        try { window.dispatchEvent(new Event("rpge-saves-synced")); } catch (e) {}
+      })
       .catch((e) => console.warn("[rpge saves] server-side saves unavailable (local only):", (e && e.message) || e));
     if (window.requestIdleCallback) window.requestIdleCallback(go, { timeout: 12000 });
     else setTimeout(go, 3000);

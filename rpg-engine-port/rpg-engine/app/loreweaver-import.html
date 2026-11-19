@@ -793,6 +793,12 @@
     if ($("targetWorld").value) await loadCards();
     await loadBooks();
   }
+  // The storage shim's boot reconcile lands a few seconds AFTER this page reads the worlds
+  // index — a fresh browser (or a slow sync) shows "No game worlds yet" even when worlds exist
+  // server-side. When the sync completes, re-read the dropdown if it found nothing.
+  window.addEventListener("rpge-saves-synced", function () {
+    if (!$("targetWorld").value) refresh();
+  });
 })();
 </script>
 </body>
