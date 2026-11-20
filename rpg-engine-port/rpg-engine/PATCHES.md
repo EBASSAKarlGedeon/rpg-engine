@@ -614,3 +614,23 @@ generation on `recraft/recraft-v4.1-flash-v2:free` (user choice — the OpenAI i
 expensive at NPC-portrait volume), route-off + bridge-down paths). Settings UI verified by
 screenshot: server provider selected, Base URL/key rows hidden, model datalist populated,
 Portraits/Scene/Other all ON.
+
+### [rpge-patch 018] followups #3 (2026-11-21) — console triage + hero tab fix
+- **postHostHash leftover** (`8abb7b4`): the hash-echo repair postMessage targeted the hardcoded
+  `https://perchance.org` origin (pre-Loreweaver leftover) — under Loreweaver the browser refused
+  delivery ("Failed to execute postMessage … does not match the recipient window's origin").
+  Now derives the target from `location.ancestorOrigins` (nearest last) with `document.referrer`
+  fallback; skips silently when the host origin is unknown. Nobody consumes `changeUrl` under
+  Loreweaver (Perchance host-bar vestige) — kept for standalone-serving parity.
+- **Hero panel tab switch was dead** (`73bd71b`): `.hero-tab-body { display: flex }` (author rule)
+  beat the UA `[hidden] { display: none }`, so BOTH Stats and Profile panes rendered at once and
+  the tab buttons looked like no-ops (user-reported with video). Fix: explicit
+  `.hero-tab-body[hidden] { display: none }`. New `tools/check-hero-tabs.js` (seeded kv stub, no
+  real-server writes) verifies initial/profile/stats states via DOM probe + clipped screenshots;
+  NPC popup unaffected (it swaps content per tab, no hidden attribute).
+- **Phantom system extension documented, not fixable in place**: packaged builds discover the dev
+  clone (`public/scripts/extensions/rpg-engine`) as a SYSTEM extension alongside the real
+  third-party one; its wrapper's `../../../` imports resolve to `/extensions.js` (404) at system
+  depth → "Extension 'RPG Engine' failed to load: [object Event]" toast. Real extension loads
+  fine right after. Loreweaver FAQ entry added; only real fix is moving the dev clone out of the
+  public tree (future reorg; renaming manifest.json would break the third-party deployment).

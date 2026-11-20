@@ -13,7 +13,7 @@ const b64url = (s) => Buffer.from(s, "utf8").toString("base64url");
   put("rpg", "session_" + s.id, s);
   put("rpg", "activeSession", s.id);
   const browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+  const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
   await page.route("**/api/rpg-engine-kv/**", async (r) => {
     const op = r.request().url().split("/").pop().split("?")[0];
     const body = r.request().postDataJSON() || {};
@@ -25,11 +25,16 @@ const b64url = (s) => Buffer.from(s, "utf8").toString("base64url");
   });
   await page.goto(APP_URL, { waitUntil: "load", timeout: 90000 });
   await page.waitForTimeout(20000);
-  // dismiss any popup
-  await page.evaluate(() => { const ov = [...document.querySelectorAll(".popup-overlay")].find(o => o.offsetParent); if (ov) { const b = [...ov.querySelectorAll("button")].find(b => b.offsetParent); b && b.click(); } });
-  await page.waitForTimeout(1500);
-  // open the HERO (character) rail section
-  await page.evaluate(() => { const b = document.querySelector('#rightRail .rail-tab[data-sec="character"]'); if (b) b.click(); });
+  // close the menu drawer if it opened, so the right rail is clear
+  await page.evaluate(() => { const x = document.querySelector(".drawer-close, #menuClose, .menu-head .popup-x"); if (x) x.click(); });
+  await page.waitForTimeout(800);
+  // open the HERO (character) rail section — force the drawer open, then pick the section
+  await page.evaluate(() => {
+    const rail = document.querySelector("#rightRail");
+    if (rail) rail.classList.remove("collapsed");
+    const scrim = document.querySelector("#railScrim"); if (scrim) scrim.classList.add("show");
+    const b = document.querySelector('#rightRail .rail-tab[data-sec="character"]'); if (b) b.click();
+  });
   await page.waitForTimeout(2000);
   await page.screenshot({ path: "C:/Users/Gedeon/AppData/Local/Temp/rpge-heavy/ht10-fixed-initial.png" });
   const snap = () => page.evaluate(() => ({
