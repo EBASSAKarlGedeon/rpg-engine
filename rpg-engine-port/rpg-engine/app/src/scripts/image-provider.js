@@ -644,7 +644,7 @@ export function imageProviderControls(opts = {}) {
       <datalist id="pf-img-model-list" class="pf-img-modellist"></datalist>
       <p class="pf-hint pf-img-modellist-row" hidden>The list is your account's real image models on the server.</p>
       <div class="pf-kv pf-img-followrow"><span class="pf-k">Follow Image Gen</span><span class="pf-v pf-img-followsw"></span></div>
-      <p class="pf-hint pf-img-followhint">Render with whatever endpoint is configured in Loreweaver → Image Generation — one set of settings for chat and game (currently mirrored: ComfyUI source). While this is on, the Model field above is ignored.</p>
+      <p class="pf-hint pf-img-followhint">Render with whatever endpoint is configured in Loreweaver → Image Generation — one set of settings for chat and game (every source is mirrored; video models are refused). While this is on, the Model field above is ignored.</p>
       <details class="foldbox pf-img-routes" open>
       <summary>External AI images</summary>
       <p class="pf-hint">Each image job below can use the provider above — or fall back to Perchance AI when switched off. Off is useful when the external model is worse at a job, or to save credits.</p>
@@ -923,11 +923,13 @@ export function imageProviderControls(opts = {}) {
         if (followMount.dataset.on === "1") {
           const st = await followStatus();
           if (!st.ok) {
-            statusEl.textContent = st.source !== "comfy"
-              ? "⚠ Follow is on, but the Image Generation source is " + (st.source || "(none)") + " — set it to ComfyUI (wave 1)."
-              : "⚠ ComfyUI unreachable at " + (st.comfy_url || "(no URL)") + " — start it with --listen 0.0.0.0 and check the URL.";
-          } else {
+            statusEl.textContent = st.source
+              ? "⚠ ComfyUI unreachable at " + (st.comfy_url || "(no URL)") + " — start it with --listen 0.0.0.0 and check the URL."
+              : "⚠ No Image Generation settings found — configure them in Loreweaver first.";
+          } else if (st.source === "comfy") {
             statusEl.textContent = "✓ Following Image Generation (" + (st.workflow || "workflow") + ") — ComfyUI reachable.";
+          } else {
+            statusEl.textContent = "✓ Following Image Generation — source: " + st.source + ".";
           }
         } else {
           await testImageConnection("", "", "loreweaver");
