@@ -553,7 +553,7 @@ export function aiModelSection() {
       <label>Top K <input class="popup-in pf-ai-samp" data-k="top_k" type="number" min="0" max="200" step="1" placeholder="default"></label>
       <label>Frequency penalty <input class="popup-in pf-ai-samp" data-k="frequency_penalty" type="number" min="-2" max="2" step="0.01" placeholder="default"></label>
       <label>Presence penalty <input class="popup-in pf-ai-samp" data-k="presence_penalty" type="number" min="-2" max="2" step="0.01" placeholder="default"></label>
-      <label>Max reply tokens <input class="popup-in pf-ai-samp" id="pfAiMaxReply" type="number" min="1" max="128000" step="64" placeholder="default"></label>
+      <label>Max reply tokens <input class="popup-in pf-ai-maxreply" id="pfAiMaxReply" type="number" min="1" max="128000" step="64" placeholder="default"></label>
     </div>
     <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">${infoTipLabelHtml("Streaming", "Whether replies arrive word-by-word as the model writes (live typing) or all at once when finished. Streaming is usually nicer AND safer — a stalled connection is visible sooner.")}</span><span class="pf-v pf-ai-stream"></span></div>
     </details>

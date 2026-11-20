@@ -34,6 +34,7 @@ fs.writeFileSync(FIXTURE_PATH, FIXTURE, "utf8");
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   page.on("pageerror", (e) => { if (!/^offline$/.test(e.message)) problems.push("pageerror: " + e.message.slice(0, 160)); });
+  page.on("console", (m) => { const t = m.text(); if (/\[rpge\]|preset|Preset|error|Error/i.test(t)) console.log("  console:", m.type(), t.slice(0, 220)); });
   await page.route("**/api/rpg-engine-kv/**", async (r) => {
     const op = r.request().url().split("/").pop().split("?")[0];
     const body = r.request().postDataJSON() || {};
@@ -51,7 +52,13 @@ fs.writeFileSync(FIXTURE_PATH, FIXTURE, "utf8");
 
   console.log("1) Settings → Prompt Preset opens");
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("mno:open-settings", { detail: { section: "preset" } })));
-  await page.waitForSelector(".pf-preset", { timeout: 20000 });
+  try {
+    await page.waitForSelector(".pf-preset", { timeout: 20000 });
+  } catch (e) {
+    const diag = await page.evaluate(() => ({ activeNav: [...document.querySelectorAll(".pf-md-btn")].filter(b => b.classList.contains("on")).map(b => b.textContent), empty: !!document.querySelector(".pf-md-panel .hm-empty"), emptyText: (document.querySelector(".pf-md-panel .hm-empty") || {}).textContent || "", loading: !!document.querySelector(".pf-md-panel .set-loading") }));
+    console.log("DIAG:", JSON.stringify(diag));
+    throw e;
+  }
   ok(true, "preset section rendered");
 
   console.log("2) import via the hidden file input");
@@ -61,7 +68,7 @@ fs.writeFileSync(FIXTURE_PATH, FIXTURE, "utf8");
   ok(await page.locator(".pf-preset #psLibSel").inputValue() === "preset-fixture", "imported preset is active");
   const libBlob = readLib();
   ok(libBlob && libBlob.on === true && libBlob.active === "preset-fixture" && libBlob.presets.length === 1, "synced blob written: {presets, active, on:true}");
-  ok((await page.locator(".pf-preset .ps-list > .ps-row").count()) === 2, "two play-order rows render");
+  ok((await page.locator(".pf-preset > .ps-list > .ps-row").count()) === 2, "two play-order rows render");
   ok(await page.locator(".pf-preset .ps-orph summary").textContent().then(t => t.includes("Not in play order (1)")), "orphan foldout shows 1 block");
   await page.screenshot({ path: SHOT + "ps01-import.png" });
 
@@ -70,7 +77,7 @@ fs.writeFileSync(FIXTURE_PATH, FIXTURE, "utf8");
   await page.waitForTimeout(400);
   await page.locator(".pf-preset .ps-addorphan").first().click();
   await page.waitForTimeout(800);
-  ok((await page.locator(".pf-preset .ps-list > .ps-row").count()) === 3, "orphan appended to the play order");
+  ok((await page.locator(".pf-preset > .ps-list > .ps-row").count()) === 3, "orphan appended to the play order");
   ok((await page.locator(".pf-preset .ps-orph").count()) === 0, "orphan foldout gone (nothing left outside the order)");
   const libBlob2 = readLib();
   const order2 = libBlob2 && libBlob2.presets[0] && JSON.parse(libBlob2.presets[0].raw).prompt_order[0].order;
@@ -103,6 +110,7 @@ fs.writeFileSync(FIXTURE_PATH, FIXTURE, "utf8");
 
   console.log("6) AI Model → Response tuning");
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("mno:open-settings", { detail: { section: "aimodel" } })));
+  await page.locator(".pf-ai-samp summary").first().click(); // open the Response tuning foldbox
   await page.waitForSelector(".pf-ai-sampgrid", { timeout: 30000 });
   ok((await page.locator(".pf-ai-sampgrid input.pf-ai-samp").count()) === 5, "5 sampler inputs render");
   ok(await page.locator("#pfAiMaxReply").count() === 1, "max-reply input renders");
