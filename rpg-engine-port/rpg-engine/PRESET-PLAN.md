@@ -61,8 +61,8 @@ shorthand, `trimStrings`, `{{user}}` macro expansion, `substituteRegex: ESCAPED`
 regex metacharacters, `regex_placement` gating, `minDepth`/`maxDepth` gating,
 `runOnEdit`/`markdownOnly`/`promptOnly` gating, LRU cache reuse. No new DOM harness needed.
 
-### [rpge-patch 022] — Engine-native prompt-stack model + editor
-New `app/src/scripts/presets.js` (or similar): schema-compatible model of ST's `prompts` +
+### [rpge-patch 022] — Engine-native prompt-stack model + editor — SHIPPED (2026-11-22, see PATCHES.md)
+Original sketch: New `app/src/scripts/presets.js` (or similar): schema-compatible model of ST's `prompts` +
 `prompt_order`, expand `{{setvar}}`/`{{getvar}}`/`{{// }}` macros, feed the assembled system prompt
 to the existing `rp-engine.js` `RPEngine` prompt pipeline (`narratorPrompt` currently takes `genText`
 + `promptText` + `proseRulesText` + `vibeText`… — this layer replaces that growing if/else tree).

@@ -763,3 +763,76 @@ ordered multi-script chaining.
 
 **Not covered (future)**: script storage/UI (likely world-level regex rules, a later patch).
 Preset system + macro universe + FF 5.4 Engine Edition preset data remain patches 022/023.
+
+### [rpge-patch 022] Prompt-stack preset model + editor (2026-11-22)
+Third patch in the preset-intake series (see `PRESET-PLAN.md` §022). The engine can now load a
+SillyTavern chat-completion preset (the `prompts` + `prompt_order` JSON) and feed its enabled
+blocks into every GM turn. Data reuse, not UI copy — the schema and macro grammar speak ST's
+exact format, the editor is the engine's own lean panel.
+
+**New module `app/src/scripts/presets.js`** (pure data + text, no DOM — plain-Node testable):
+- `parsePresetJson(raw)` — validates an ST preset JSON and keeps the parsed object verbatim
+  (Export round-trips byte-identically; extra keys untouched). Builds the play order from
+  `prompt_order`'s global group (`character_id: 100001`, else the first group); entries are
+  `{ identifier, enabled }` exactly like ST's.
+- `expandMacros(text, ctx)` — the ST macro grammar, engine-local, ST pass order
+  (comments → rolls → variable setters → getters → whitespace/legacy → env → choice):
+  `{{// comment}}`, `{{trim}}` (ST's newline-eating regex), `{{noop}}`, `{{newline}}`,
+  `{{user}}`/`{{char}}` + `<USER>`/`<BOT>`/`<CHAR>`, `{{setvar}}`/`{{addvar}}`/`{{incvar}}`/
+  `{{decvar}}`/`{{getvar}}` (values stored raw; nested `{{getvar}}`s inside templates resolve
+  on later passes — the same fixpoint ST's newer macro engine reaches), `{{roll:FORMULA}}`
+  (tiny NdM parser, digits-only = 1dN; `{{roll::1d20}}` double-colon tolerated — ST's old regex
+  engine renders that form EMPTY, here the intended dice actually roll), `{{random:…}}` (fresh
+  per call) and `{{pick:…}}` (stable within one expansion), `{{isotime FMT}}`/`{{isodate FMT}}`
+  (moment-token subset: yyyy/yy/MMMM/MMM/MM/dd/DD/dddd/ddd/HH/hh/h/mm/ss/A/a — token order
+  proven safe against month/day names eating each other), `{{date}}`/`{{time}}`/`{{weekday}}`.
+  Unknown macros stay LITERAL (no silent loss). Variable scope = one assembly call = one turn
+  (matches ST's per-chat chat_metadata being reset by the preset's own blanking setvars).
+- `assemblePresetPrompt(preset, ctx)` — walks the play order: disabled skipped, `marker: true`
+  skipped (their slots are ENGINE-NATIVE: charDescription→character sheet, chatHistory→
+  transcript, scenario→premise, worldInfo*→lorebook), unreferenced prompts ignored (ST never
+  plays out-of-order clones), empty content dropped. In-flow blocks macro-expand and join with
+  `\n\n`; `injection_position: 1` blocks split out as injections sorted by depth →
+  injection_order → play order.
+
+**Engine seam (`rp-engine.js`)**: `RPEngine` now takes `preset` (the parsed preset, or null for
+byte-identical pre-022 prompting) and `buildContext` has two insertions:
+1. `PRESET DIRECTIVES (…)` cluster rides the STABLE prefix right after the prose pack and before
+   the premise (a preset's blocks are static per preset, so the prefix cache stays banked).
+2. ABSOLUTE injections ride immediately before the final `Now write your reply:` directive
+   (the end-of-conversation position, i.e. depth 0 — ST splices them into the message list at
+   `injection_depth`; the engine sends ONE assembled text, so depth is a sort key only. The
+   target preset uses depth 0 exclusively).
+`presetAssemble(hero)` expands fresh per turn ({{time}}, {{roll}}, setvar/getvar chains are
+per-turn state) and degrades gracefully: a broken preset plays the turn WITHOUT the stack, never
+takes down the session. {{user}} inside preset blocks resolves to the hero via the same
+substitution as every other section.
+
+**Editor (Settings → Prompt Preset, `main.js presetSection()`)**: lean ST Prompt Manager —
+Import (`⬆`, speaks ST's `.json`, errors toast, never partial), Export (`⬇`, round-trip),
+On/Off switch (live: flips `engine.preset` on the running engine, next turn picks it up),
+play-order list with per-block enable checkbox, role/in-chat badges, ▲▼ reorder, delete
+(confirm popup), ＋ New block, and a click-to-expand content editor (name, role
+system/user/assistant, full text with macros — same grammar the assembler runs). Engine-native
+marker slots render as dimmed rows ("engine slot") so the stack reads exactly like ST's manager
+without pretending the engine fills them from ST data.
+
+**Storage**: `localStorage["rpge.promptPreset"]` = `{ raw, name, on }` — machine-local, same tier
+as the AI provider prefs (an authoring choice, not story data; stays out of session saves and
+out of the hub sync's `data/` scope). `raw` is re-serialized after every edit, so the stored blob
+is always the truth Export speaks.
+
+**Verified**: `tools/check-presets.js` — 80/80 checks green as plain Node (no browser):
+macro grammar (incl. blank-then-fill template resolution across passes, `{{trim}}`'s exact
+newline eating, invalid-roll→empty), parse validation, play-order assembly (disable/marker/
+orphan/whitespace rules), injection splitting + sorting, vars shared across blocks, and the
+REAL FF 5.4 file: 68 prompts / 61 order entries parsed error-free, Export round-trips
+byte-identically, no raw `{{user}}`/`{{getvar}}`/`{{setvar}}` survives expansion, and the real
+`RPEngine.buildContext` seam (no-preset baseline, cluster placement between prose rules and the
+premise, injections before the reply directive, garbage-preset degradation).
+`check-regex.js` stays green (40/40); `main.js`/`presets.js`/`rp-engine.js` pass `node --check`.
+
+**Not covered (future)**: per-turn sampler mapping (temperature etc. — the bridge's connection
+profiles already own that job), `injection_depth` positional slicing inside the transcript
+(only relevant if a preset ships non-zero depths; the target preset doesn't), and the FF 5.4
+"Engine Edition" preset DATA itself — that's patch 023.
