@@ -122,6 +122,22 @@ fs.writeFileSync(FIXTURE_PATH, FIXTURE, "utf8");
   ok(cfg.samplers && cfg.samplers.top_p === "", "unset samplers stay blank (= profile decides)");
   await page.screenshot({ path: SHOT + "ps03-tuning.png" });
 
+  // [rpge-patch 023] step 7: the bundled FF 5.4 Engine Edition button (one click → library entry,
+  // active, ON, play-order rows render; Scene State block visible).
+  console.log("7) bundled FF 5.4 Engine Edition button");
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("mno:open-settings", { detail: { section: "preset" } })));
+  await page.waitForSelector(".pf-preset", { timeout: 20000 });
+  await page.locator("#psBundled").click();
+  await page.waitForTimeout(2500);
+  const libBlob5 = readLib();
+  ok(libBlob5 && libBlob5.active === "FF 5.4 — Engine Edition" && libBlob5.on === true, "bundled preset imported as active + ON");
+  ok(libBlob5 && libBlob5.presets.some((p) => p.name === "FF 5.4 — Engine Edition"), "library lists the bundled entry");
+  const rows = await page.locator(".pf-preset > .ps-list > .ps-row").count();
+  ok(rows >= 25, "play-order rows render for the real preset (" + rows + " rows)");
+  ok(await page.locator(".pf-preset .ps-name").allTextContents().then((ts) => ts.some((t) => t.includes("Scene State"))), "Scene State block visible (renamed from Character Cells)");
+  ok(await page.locator(".pf-preset .ps-name").allTextContents().then((ts) => !ts.some((t) => /DnD Simulator|Internal Agenda|GM's Notebook|Twitter/.test(t))), "internal-states + Twitter blocks absent from the order");
+  await page.screenshot({ path: SHOT + "ps04-bundled.png" });
+
   await browser.close();
   console.log("");
   console.log(problems.length === 0 ? "PRESET-UI OK" : "PRESET-UI FAIL: " + problems.length + " problem(s)");
