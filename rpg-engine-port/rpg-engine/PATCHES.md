@@ -676,3 +676,50 @@ switches, buff badge `8 → 39 +31` (stacking, max-breaking), active toggle `9 �
 ⚡ button. check-storage.js + check-imports.js still OK. Screenshots a01–a04.
 
 **Not covered (future)**: action costs/cooldowns, NPC actions, auto-expiry timers.
+
+### [rpge-patch 020] GFX panels + inline images in message text (2026-11-21)
+The first of the preset-intake series (see `PRESET-PLAN.md`, design rationale in
+`docs/PRESETS.md` on the Loreweaver side). Two new markup forms recognized by the shared
+message-text renderer `app/src/scripts/rich-text.js` (`core()` is the single choke point for
+`inlineMd`/`richText`/`richTextWithMentions`, so this lights up the transcript, world
+descriptions and changelog at once):
+
+**GFX panels** — `<!-- GFX_START -->…<!-- GFX_END -->` wraps a real HTML fragment (FF 5.4's
+`<gfx_protocol>` Pop-in Graphics: terminals, signs, maps, phones rendered live in chat). Because
+the body is intentionally live HTML, it's lifted out of the raw source BEFORE `esc()` runs (a
+NUL-ish `GFX_MARK` placeholder rides the escape/markdown pipeline untouched, same trick as code
+spans) and only spliced back at the very end of `core()` — so no mark-up pass (mentions, quotes,
+bold, italic, the blanket `\n→<br>` in `richText`) can ever reach into it. Body is
+whitelist-sanitized via `DOMParser` (`sanitizeGfxHtml`): allowed tags are a fixed set (div/span/
+p/br/b/i/pre/code/headings/tables/lists/button/img/…); every attribute except `class`/`title`/
+`style`/`src`/`alt`/`width`/`height` is stripped (notably `id=` — collides with app
+`querySelector` lookups — and all `on*` handlers); `style` values are filtered to a
+CSS-property allowlist AND checked against a function/keyword blacklist (`url()`/`expression()`/
+`javascript:`/`@import`/`behavior:`); `src` on images goes through the same
+`isSafeImgSrc` whitelist as inline images. Newlines in text nodes become `<br>` at the source
+(the outer `richText` pass would otherwise double-process them into stray breaks inside the
+panel). Body is trimmed before sanitizing (authoring whitespace around the comment markers would
+otherwise show up as stray `<br>` siblings). Default theme CSS for `.gfx-wrap` +
+`.gfx-terminal`/`.gfx-map`/`.gfx-letter`/`.gfx-phone` (purely cosmetic — an AI can override
+inline via `style="…"`, which gets filtered too).
+
+**Inline images** — `![alt](src)` renders `<img class="msg-img">`. Both URL forms work (verified
+end-to-end on the real server): external `https://…` URLs (helmet CSP is off in
+`src/server-main.js` — `contentSecurityPolicy: false`) and Loreweaver-served `/user/images/…`
+paths (real route in `src/users.js`: `router.use('/user/images/*', …)` serving
+`req.user.directories.userImages` — same-origin, no CORS issue). `src` runs through
+`isSafeImgSrc` (rejects `javascript:`/`vbscript:`/non-image `data:`); rejected URLs degrade to a
+visible literal-text fallback (`.msg-img-bad`) instead of a broken tag. Alt + src are captured
+post-`esc()` (brackets/parens survive `esc()`, which only touches `&<>"'`) so they're already
+entity-safe for attribute use — no attribute-injection vector.
+
+**Verified**: `tools/check-gfx-images.js` (seeded kv stub, boot→re-seed→reload pattern like
+`heavy-session.js`) — 12/12 checks green: GFX panel renders as real DOM (not escaped text), both
+image URL forms render with correct `src`/`alt`, and a hostile fixture (GFX block containing
+`<img onerror=…>` + `<script>`, plus a `![](javascript:…)` image) leaks zero executable payload:
+no `window.__pwned*` flags set, no `img[onerror]`/`<script>` survived the sanitizer, no
+`javascript:` src on any rendered image, rejected URL visibly degraded to literal text. Screenshots
+`gz01-gfx-images-1500.png` / `gz02-gfx-images-1000.png` in `C:/Users/Gedeon/AppData/Local/Temp/rpge-heavy/`.
+
+**Not covered (future)**: `chatMd` (Discussion page) stays plain-markdown-only — out of scope
+unless requested. Preset system / macro expansion / regex engine are separate patches (021/022/023).
