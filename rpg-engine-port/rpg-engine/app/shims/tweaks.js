@@ -25,6 +25,13 @@
       btn.style.display = "none";
       const popup = btn.closest(".popup");
       if (wasVisible && popup && !popup.dataset.rpgeStart && /identity/i.test(text(btn))) {
+        // Only hijack the DEFAULT (no-section) open — the one that lands on the now-hidden
+        // Identity list entry. When a section was REQUESTED, its nav button is already marked
+        // `.on` (applySelect toggles classes synchronously before the section loads), so
+        // redirecting would steal the user's target: opening Settings → Prompt Preset flipped
+        // to AI Model ~70 ms in (found by [rpge-patch 022 followup] verification).
+        const active = popup.querySelector(".pf-md-btn.on");
+        if (active && !/identity/i.test(text(active))) continue;
         popup.dataset.rpgeStart = "1";
         const ai = [...popup.querySelectorAll("button")].find((b) => /^AI Model$/i.test(text(b)));
         if (ai) ai.click();
