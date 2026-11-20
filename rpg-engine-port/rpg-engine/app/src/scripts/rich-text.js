@@ -25,7 +25,10 @@ function core(s, withQuotes, withMentions) {
   // intentionally real HTML (sanitized here, not escaped), so it must not pass through the
   // escape-first pipeline. Everything else continues to escape-first as before.
   let src = String(s == null ? "" : s).replace(GFX_RE, (_, body) => {
-    gfx.push(sanitizeGfxHtml(body));
+    // [rpge-patch 020] Trim the body before sanitizing: the whitespace/newlines around the
+    // comment markers are authoring-formatting noise, not panel content — without this they'd
+    // survive as stray <br>/text siblings inside .gfx-wrap instead of being swallowed.
+    gfx.push(sanitizeGfxHtml(String(body).trim()));
     return GFX_MARK + (gfx.length - 1) + GFX_MARK;
   });
   let out = esc(src).replace(/`([^`]+)`/g, (_, code) => {
@@ -151,7 +154,15 @@ function sanitizeGfxHtml(html) {
   const out = [];
   const walk = (el) => {
     for (const child of el.childNodes) {
-      if (child.nodeType === 3) { out.push(esc(child.nodeValue)); continue; } // text node
+      if (child.nodeType === 3) {
+        // [rpge-patch 020] Newlines in text nodes become <br> here (esc() doesn't touch \n):
+        // richText()/richTextWithMentions() run a blanket \\n→<br> pass on their whole return
+        // value AFTER core() splices GFX back in, so any literal \n surviving here would get
+        // double-processed into stray <br>s inside the panel. Converting once, at the source,
+        // makes the outer pass find nothing left to convert — one line break, not two.
+        out.push(esc(child.nodeValue).replace(/\n/g, "<br>"));
+        continue;
+      }
       if (child.nodeType !== 1) continue; // comments, PIs, doctypes — dropped
       const tag = child.tagName.toLowerCase();
       if (!GFX_ALLOWED_TAGS.has(tag)) { walk(child); continue; } // unwrap: keep children's text, drop the tag
