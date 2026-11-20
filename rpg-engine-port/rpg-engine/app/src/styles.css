@@ -466,6 +466,67 @@
      line it sits in, so an aside reads quieter in bright narration and in muted panel copy alike. */
   .em { font-style: italic; opacity: .8; }
   .q { color: #E0D6B8; }
+  /* [rpge-patch 020] Inline message images (`![alt](src)` in chat text, from rich-text.js) —
+     capped to the bubble width and a sane max-height so a portrait doesn't blow out the
+     transcript. `.msg-img-bad` is the plain-text fallback left behind when a URL fails the
+     whitelist (javascript:/data: non-image) — deliberately NOT an <img>, just a dim raw echo. */
+  .msg-img {
+    max-width: min(100%, 520px); max-height: 60vh;
+    width: auto; height: auto; object-fit: contain;
+    display: block; margin: 6px 0 2px; border-radius: 8px;
+    background: var(--panel2);
+  }
+  .msg-img-bad {
+    display: inline-block; margin: 4px 0; padding: 3px 8px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px;
+    color: var(--muted); background: var(--panel2);
+    border: 1px dashed var(--border); border-radius: 4px;
+    word-break: break-all;
+  }
+  /* [rpge-patch 020] GFX panels (FF 5.4 Pop-in Graphics protocol: `<!-- GFX_START -->…<!-- GFX_END -->`
+     around a sanitized HTML fragment rendered live in the transcript). The outer .gfx-wrap handles
+     rhythm + horizontal scroll for wide terminals; the gfx-terminal/map/letter/phone classes are
+     *default* themes matching the preset's documented looks — an AI can always override inline via
+     style="…" (values filtered to a property allowlist in rich-text.js). Empty wraps are hidden
+     (an all-whitespace GFX block shouldn't leave a floating bubble). */
+  .gfx-wrap {
+    display: block; margin: 8px 0; padding: 0;
+    max-width: 88%; overflow-x: auto;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--panel2);
+  }
+  .gfx-wrap:empty { display: none; }
+  .gfx-terminal {
+    background: #0a0a0a; color: #0f0;
+    border: 1px solid #0f03; box-shadow: 0 0 10px #0f03 inset;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px; line-height: 1.5; padding: 10px 12px;
+    white-space: pre-wrap; overflow-wrap: break-word;
+  }
+  .gfx-map {
+    background: #f4e9c1; color: #4a3f27;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13px; line-height: 1.35; padding: 12px;
+    white-space: pre; letter-spacing: 1px;
+  }
+  .gfx-letter {
+    background: #f7f2e4; color: #3a2f1e;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 14.5px; line-height: 1.6; padding: 16px 20px;
+    border-radius: 2px;
+    background-image: linear-gradient(rgba(0,0,0,.03) 1px, transparent 1px);
+    background-size: 100% 28px;
+  }
+  .gfx-phone {
+    background: #141414; color: #e8e8e8;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px; line-height: 1.5; padding: 12px;
+    border: 3px solid #2a2a2a; border-radius: 18px;
+  }
+  .gfx-phone::before {
+    content: "📱"; display: block; text-align: center;
+    font-size: 11px; letter-spacing: 2px; opacity: .6; margin-bottom: 8px;
+  }
   /* `code` spans in chat — inline interface chips (items, buttons, places the GM names with
      backticks). Scoped to the transcript so editor/panel `code` keeps its own quiet style. */
   #transcriptEl code {

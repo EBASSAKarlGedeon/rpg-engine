@@ -1,0 +1,114 @@
+// Patch 020 verification: GFX panels + inline images in message text. Seeded kv stub (no
+// real-server writes). Verifies: (1) a GFX block renders as live sanitized HTML (not escaped
+// text), (2) inline ![](src) images render for both external-URL and /user/images/ paths,
+// (3) a hostile fixture (img onerror + javascript: URL) leaks NO executable payload.
+// Usage: node tools/check-gfx-images.js
+const { chromium } = require("playwright");
+const { makeWorld, makeSession } = require("./test-seeds.js");
+const APP_URL = "http://127.0.0.1:8000/scripts/extensions/third-party/rpg-engine/rpg-engine-port/rpg-engine/app/index.html";
+const b64url = (s) => Buffer.from(s, "utf8").toString("base64url");
+const SHOT = "C:/Users/Gedeon/AppData/Local/Temp/rpge-heavy/";
+const problems = [];
+const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems.push(msg); console.log("  FAIL:", msg); } };
+
+(async () => {
+  const kv = new Map();
+  const put = (folder, key, val) => kv.set(b64url(folder + "\u0000" + key) + ".json", JSON.stringify(val));
+  const s = makeSession();
+  // Push 3 extra GM narration messages exercising every new rendering path.
+  s.messages.push({ role: "narrator", text: [
+    "You boot the terminal against the far wall. It flickers to life.",
+    "",
+    "<!-- GFX_START -->",
+    '<div class="gfx-terminal">C:\\VAULT&gt; scan --sector 7',
+    "SECTOR 7: 3 HOSTILES DETECTED",
+    "ACCESS: GRANTED</div>",
+    "<!-- GFX_END -->",
+    "",
+    "The screen confirms it. You spot a portrait pinned to the noticeboard:",
+    "",
+    "![Great Sage portrait](/user/images/Test/Great_Sage.png)",
+    "",
+    "And a rough sketch passed to you by a traveler:",
+    "",
+    "![](https://ella.janitorai.com/media-approved/UOwsuxUbwT61brx9RzhEx.webp)",
+  ].join("\n") });
+  s.messages.push({ role: "narrator", text: [
+    "A hostile note is slipped under the door — someone testing you:",
+    "",
+    "<!-- GFX_START -->",
+    '<div class="gfx-terminal">HACK ATTEMPT <img src=x onerror="window.__pwned=1"> and <script>window.__pwned2=1</script></div>',
+    "<!-- GFX_END -->",
+    "",
+    "Also a suspicious sketch with a dangerous link:",
+    "",
+    "![](javascript:window.__pwned3=1)",
+  ].join("\n") });
+  s.messages.push({ role: "narrator", text: "Plain message with no panels or images — baseline control." });
+  put("worlds", "wstress", makeWorld());
+  put("worlds", "index", [{ id: "wstress", name: "Stress Test Valley", cover: "", tags: [], description: "test", nsfw: false, author: "", authorId: "", remix: null, origin: "", createdAt: "2026-01-01", updatedAt: "2026-01-01" }]);
+  put("rpg", "sessions", [{ id: s.id, name: s.name, charName: "Wren", worldId: "wstress", worldName: "Stress Test Valley", turn: 11, lastUpdated: 1700000000000, avatar: "", portraitSig: "" }]);
+  put("rpg", "session_" + s.id, s);
+  put("rpg", "activeSession", s.id);
+
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1500, height: 1100 } });
+  page.on("pageerror", (e) => { if (!/^offline$/.test(e.message)) problems.push("pageerror: " + e.message.slice(0, 160)); });
+  await page.route("**/api/rpg-engine-kv/**", async (r) => {
+    const op = r.request().url().split("/").pop().split("?")[0];
+    const body = r.request().postDataJSON() || {};
+    if (op === "list") return r.fulfill({ json: { entries: [...kv.keys()].map(n => ({ name: n, mtimeMs: 1700000000000, size: (kv.get(n) || "").length })) } });
+    if (op === "get") return r.fulfill({ json: { content: kv.has(body.name) ? kv.get(body.name) : null, mtimeMs: kv.has(body.name) ? 1700000000000 : 0 } });
+    if (op === "put") { kv.set(body.name, body.content); return r.fulfill({ json: { mtimeMs: 1700000000000 } }); }
+    if (op === "delete") { kv.set(body.name.replace(/\.json$/, "") + ".tomb.json", JSON.stringify({ deletedAt: 1700000000000 })); kv.delete(body.name); return r.fulfill({ json: { ok: true, mtimeMs: 1700000000000 } }); }
+    return r.fulfill({ json: { ok: true } });
+  });
+  await page.goto(APP_URL, { waitUntil: "load", timeout: 90000 });
+  await page.waitForTimeout(20000);
+
+  console.log("1) GFX terminal panel renders as live HTML");
+  const gfx = await page.evaluate(() => {
+    const wraps = [...document.querySelectorAll(".gfx-wrap")];
+    return {
+      count: wraps.length,
+      terminalText: wraps.map(w => w.textContent).join(" || "),
+      firstTag: wraps[0] ? wraps[0].firstElementChild.tagName.toLowerCase() : null,
+      hasLiteralAngleBrackets: wraps.some(w => w.textContent.includes("<div")),
+    };
+  });
+  ok(gfx.count >= 1, "at least one .gfx-wrap rendered in the transcript");
+  ok(gfx.terminalText.includes("SECTOR 7: 3 HOSTILES DETECTED"), "terminal panel shows its inner text");
+  ok(gfx.firstTag === "div", "gfx-wrap's first child is a real DOM element (div), not escaped text");
+  ok(!gfx.hasLiteralAngleBrackets, "no literal '<div' text visible — markup was rendered, not escaped");
+
+  console.log("2) inline images render (both URL forms)");
+  const imgs = await page.evaluate(() => [...document.querySelectorAll(".msg-img")].map(i => ({ src: i.getAttribute("src"), alt: i.getAttribute("alt") })));
+  ok(imgs.some(i => i.src === "/user/images/Test/Great_Sage.png" && i.alt.includes("Great Sage")), "/user/images/ path image rendered with alt text");
+  ok(imgs.some(i => i.src.startsWith("https://ella.janitorai.com/")), "external https:// image rendered");
+  ok(imgs.length >= 2, `at least 2 inline images rendered (got ${imgs.length})`);
+
+  console.log("3) hostile fixture leaks no executable payload");
+  const hostile = await page.evaluate(() => ({
+    pwned: window.__pwned, pwned2: window.__pwned2, pwned3: window.__pwned3,
+    imgsOnerror: [...document.querySelectorAll(".gfx-wrap img[onerror]")].length,
+    scriptTags: [...document.querySelectorAll(".gfx-wrap script")].length,
+    jsSrcImgs: [...document.querySelectorAll(".msg-img")].filter(i => /^javascript:/i.test(i.getAttribute("src") || "")).length,
+    badFallback: [...document.querySelectorAll(".msg-img-bad")].map(e => e.textContent).join(" || "),
+    outerHtml: document.documentElement.outerHTML,
+  }));
+  ok(hostile.pwned === undefined && hostile.pwned2 === undefined && hostile.pwned3 === undefined, "no window.__pwned* flag set — XSS payloads never executed");
+  ok(hostile.imgsOnerror === 0, "no img[onerror] survived the sanitizer");
+  ok(hostile.scriptTags === 0, "no <script> tag survived the sanitizer");
+  ok(hostile.jsSrcImgs === 0, "no msg-img carries a javascript: src");
+  ok(hostile.badFallback.includes("javascript:"), "rejected javascript: URL degraded to visible literal text fallback");
+  ok(!/<script>window\.__pwned2/.test(hostile.outerHtml) && !/onerror="window\.__pwned/.test(hostile.outerHtml), "raw payload strings absent from serialized DOM");
+
+  await page.screenshot({ path: SHOT + "gz01-gfx-images-1500.png" });
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: SHOT + "gz02-gfx-images-1000.png" });
+
+  await browser.close();
+  if (problems.length) { console.log("\nPROBLEMS: " + problems.join(" | ")); process.exit(1); }
+  console.log("\nGFX+IMAGES OK");
+})().catch(e => { console.error("ERR", e.message); process.exit(1); });

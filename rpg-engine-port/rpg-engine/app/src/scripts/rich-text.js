@@ -19,9 +19,26 @@ const CODE_MARK = "\u0000";
 
 function core(s, withQuotes, withMentions) {
   const codes = [];
-  let out = esc(s).replace(/`([^`]+)`/g, (_, code) => {
+  const gfx = [];   // [rpge-patch 020] sanitized HTML fragments, restored after esc() + all mark passes
+  const imgs = [];  // [rpge-patch 020] inline `![alt](src)` images, restored last
+  // [rpge-patch 020] Lift GFX panels OUT of the raw source before esc() runs — their body is
+  // intentionally real HTML (sanitized here, not escaped), so it must not pass through the
+  // escape-first pipeline. Everything else continues to escape-first as before.
+  let src = String(s == null ? "" : s).replace(GFX_RE, (_, body) => {
+    gfx.push(sanitizeGfxHtml(body));
+    return GFX_MARK + (gfx.length - 1) + GFX_MARK;
+  });
+  let out = esc(src).replace(/`([^`]+)`/g, (_, code) => {
     codes.push(code);
     return CODE_MARK + (codes.length - 1) + CODE_MARK;
+  });
+  // [rpge-patch 020] Inline images, matched on the ESCAPED text (brackets/parens survive esc()
+  // since esc() only touches &<>"') so the alt + src are already entity-safe for attribute use;
+  // lifted out before quotes/bold/italic so those passes can't reach into the URL/alt either.
+  out = out.replace(IMG_RE, (_, alt, src) => {
+    if (!isSafeImgSrc(src)) return "<span class=\"msg-img-bad\">![" + alt + "](" + src + ")</span>";
+    imgs.push({ alt, src });
+    return IMG_MARK + (imgs.length - 1) + IMG_MARK;
   });
   // @mentions run on the escaped text while code contents are still lifted out, so a `@name`
   // inside `` `code` `` stays literal. The emitted button holds no `*`, backtick or `&quot;`,
@@ -40,12 +57,124 @@ function core(s, withQuotes, withMentions) {
   out = out
     .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")   // bold before italic, so **a** is taken whole
     .replace(/\*([^*\n]+)\*/g, '<i class="em">$1</i>');
-  return out.replace(new RegExp(CODE_MARK + "(\\d+)" + CODE_MARK, "g"), (_, i) => "<code>" + codes[+i] + "</code>");
+  out = out.replace(new RegExp(CODE_MARK + "(\\d+)" + CODE_MARK, "g"), (_, i) => "<code>" + codes[+i] + "</code>");
+  // [rpge-patch 020] splice images back (after marks so no *...* pass ever touched their URL/alt),
+  // then GFX panels last of all (their HTML body was never escaped, so nothing else may run on it).
+  out = out.replace(new RegExp(IMG_MARK + "(\\d+)" + IMG_MARK, "g"), (_, i) => {
+    const im = imgs[+i];
+    return `<img class="msg-img" alt="${im.alt}" src="${im.src}" loading="lazy">`;
+  });
+  out = out.replace(new RegExp(GFX_MARK + "(\\d+)" + GFX_MARK, "g"), (_, i) =>
+    `<div class="gfx-wrap">${gfx[+i]}</div>`);
+  return out;
 }
 
 // Inline marks only: `code`, **bold**, *italic*. Italic renders as `.em` — faded relative to the line
 // it sits in (see styles.css).
 export const inlineMd = (s) => core(s, false, false);
+
+// --- [rpge-patch 020] GFX panels + inline images ---------------------------------------------
+// `<!-- GFX_START -->…<!-- GFX_END -->` wraps a sanitized HTML fragment (FF 5.4's Pop-in Graphics
+// protocol: terminals, signs, maps, phones rendered live in the transcript). `![alt](src)` renders
+// an inline image (external https:// URL or a Loreweaver-served `/user/images/…` path — both work:
+// helmet CSP is off in server-main.js, and `/user/images/*` is a real route in src/users.js).
+// Both are lifted out of the SOURCE before esc() can neuter them (GFX carries real HTML on purpose;
+// image alt/src are captured raw so they get exactly one esc() at splice time, no double-escape),
+// then spliced back at the very end of core() so no later mark-up pass (mentions, quotes, bold,
+// italic, and the outer \n→<br> in richText) can reach into their markup or attributes.
+const GFX_MARK = "\u0002";
+const IMG_MARK = "\u0003";
+
+// `<!-- GFX_START -->` … `<!-- GFX_END -->`, whitespace-tolerant around the comment markers.
+const GFX_RE = /<!--\s*GFX_START\s*-->([\s\S]*?)<!--\s*GFX_END\s*-->/gi;
+
+// `![alt](src)` — alt may be empty; src may not contain spaces or parens (rejects the rare
+// markdown-image-with-title form `![a](b "c")`, which just stays literal text — safe degradation).
+const IMG_RE = /!\[([^\]]*)\]\(([^()\s]+)\)/g;
+
+// URL whitelist for image `src`. Blocks javascript:/vbscript: outright and non-image data: URIs
+// (data:image/… is fine — inline base64 thumbnails are legit). Everything else (http(s),
+// root-relative `/user/images/…`/`/scripts/…`/`/api/…`, plain relative filenames) passes.
+function isSafeImgSrc(url) {
+  const u = String(url == null ? "" : url).trim();
+  if (!u) return false;
+  if (/^(?:javascript|vbscript):/i.test(u)) return false;
+  if (/^data:/i.test(u) && !/^data:image\//i.test(u)) return false;
+  return true;
+}
+
+// Whitelist sanitizer for GFX panel bodies. Walks a parsed DOM copy of the raw fragment and
+// re-emits only allowlisted tags/attrs; anything else (scripts, event handlers, id= that could
+// shadow app querySelector lookups) is unwrapped to plain text or dropped. `style` values are
+// filtered to a CSS-property allowlist AND checked against a function/keyword blacklist
+// (url()/expression()/javascript:/@import/behavior:) — enough for the protocol's own documented
+// terminal/map/letter/phone styling without opening a script vector.
+const GFX_ALLOWED_TAGS = new Set([
+  "div", "span", "p", "br", "hr", "b", "i", "em", "strong", "u", "s", "pre", "code",
+  "h1", "h2", "h3", "h4", "h5", "h6", "table", "thead", "tbody", "tr", "th", "td",
+  "ul", "ol", "li", "dl", "dt", "dd", "button", "small", "sub", "sup", "mark", "kbd", "img",
+]);
+const GFX_ALLOWED_ATTRS = new Set(["class", "title", "style", "src", "alt", "width", "height"]);
+const GFX_STYLE_PROPS = new Set([
+  "color", "background", "background-color", "background-image", "background-size", "background-position",
+  "border", "border-radius", "border-color", "border-style", "border-width",
+  "padding", "margin", "width", "height", "max-width", "max-height", "min-width", "min-height",
+  "font-family", "font-size", "font-weight", "font-style",
+  "text-align", "line-height", "letter-spacing", "text-transform",
+  "opacity", "display", "overflow", "overflow-x", "overflow-y",
+  "box-shadow", "text-shadow", "white-space", "flex", "flex-direction", "justify-content", "align-items", "gap",
+  "outline", "vertical-align", "float", "transform",
+]);
+const GFX_STYLE_BAN = /(?:url\s*\(|expression\s*\(|javascript:|@import|behavior\s*:)/i;
+
+function sanitizeGfxStyle(value) {
+  const keep = [];
+  for (const decl of String(value == null ? "" : value).split(";")) {
+    const i = decl.indexOf(":");
+    if (i < 1) continue;
+    const prop = decl.slice(0, i).trim().toLowerCase();
+    const val = decl.slice(i + 1).trim();
+    if (!GFX_STYLE_PROPS.has(prop)) continue;
+    if (GFX_STYLE_BAN.test(val)) continue;
+    keep.push(prop + ":" + esc(val));
+  }
+  return keep.join(";");
+}
+
+function sanitizeGfxHtml(html) {
+  let doc;
+  try {
+    doc = new DOMParser().parseFromString("<body>" + String(html == null ? "" : html) + "</body>", "text/html");
+  } catch {
+    return esc(String(html == null ? "" : html)); // no DOMParser (or a parse throw): plain escaped text
+  }
+  const out = [];
+  const walk = (el) => {
+    for (const child of el.childNodes) {
+      if (child.nodeType === 3) { out.push(esc(child.nodeValue)); continue; } // text node
+      if (child.nodeType !== 1) continue; // comments, PIs, doctypes — dropped
+      const tag = child.tagName.toLowerCase();
+      if (!GFX_ALLOWED_TAGS.has(tag)) { walk(child); continue; } // unwrap: keep children's text, drop the tag
+      const attrs = [];
+      for (const attr of child.attributes) {
+        const name = attr.name.toLowerCase();
+        if (!GFX_ALLOWED_ATTRS.has(name)) continue;
+        if (name === "src" && !isSafeImgSrc(attr.value)) continue;
+        if (name === "style") {
+          const css = sanitizeGfxStyle(attr.value);
+          if (css) attrs.push('style="' + css + '"');
+          continue;
+        }
+        attrs.push(name + '="' + esc(attr.value) + '"');
+      }
+      out.push("<" + tag + (attrs.length ? " " + attrs.join(" ") : "") + ">");
+      walk(child);
+      out.push("</" + tag + ">");
+    }
+  };
+  walk(doc.body);
+  return out.join("");
+}
 
 // `inlineMd` plus the transcript's two extras: "quoted speech" gets its own brighter tone, and newlines
 // become real breaks (a world description separates its paragraphs with a blank line, which plain HTML
