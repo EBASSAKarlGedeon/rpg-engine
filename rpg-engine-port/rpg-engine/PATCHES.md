@@ -634,3 +634,45 @@ Portraits/Scene/Other all ON.
   depth → "Extension 'RPG Engine' failed to load: [object Event]" toast. Real extension loads
   fine right after. Loreweaver FAQ entry added; only real fix is moving the dev clone out of the
   public tree (future reorg; renaming manifest.json would break the third-party deployment).
+
+### [rpge-patch 019] Actions & abilities (2026-11-21)
+The hero's capabilities become DECLARED DATA instead of tracked text — a Pokémon/FF-style
+ability list with real stat math, while keeping the inviolable rule: the AI never writes stats.
+
+**Data shape** (`app/src/scripts/actions.js`, new module):
+`{ id, name, icon, kind: "passive"|"active", deltas: {statKey: ±N}, effect, active, source: "hero"|"story" }`.
+Passive cards apply their deltas constantly; active cards only while toggled on. Deltas STACK.
+
+**Buff math (code, never AI)**: `effectiveStats(character, statDefs)` = base + passive deltas +
+active deltas (while on). Buffs deliberately EXCEED the world stat max (creation budget, not a
+cap — being buffed is the point); only the LOW side clamps to the stat min (curses can't go <1).
+Applied at: `resolveCheck` (dice), the referee call (determineCheck sees effective values), the
+hero sheet (row shows `base → eff` + net badge, tooltip lists each contributing action), and the
+GM context (an EFFECTIVE STATS block appears while any buff differs from base, so narration
+agrees with the dice). Tracker cap formulas still read BASE stats (deliberate: a strength buff
+shouldn't silently inflate an exp cap).
+
+**GM context**: `characterSheet` gains an ACTIONS & ABILITIES block; a world with stats always
+carries the ACTION_GAIN_RULE inviting the GM to award new abilities when the story genuinely
+grants one.
+
+**GM strip (machine-readable, extracted pre-render like [TRACKERS])**:
+`[ACTION: Name | passive|active | str +3, agi -1 | One-sentence effect.]` (optional `icon: X`
+segment). `parseActionStrips` pulls them out of the reply; gains ride on the turn's last message
+(`m.actionGains`) and render as an inline ACCEPT card in the chat — accepting normalizes the
+card (unknown stat keys dropped), stores it (`source: "story"`), and marks the message
+(`actionGainsAccepted`) so re-renders/rewinds stay consistent. The strip itself never renders.
+
+**UI**: hero panel gets an **Actions** tab (Stats | Actions | Profile); card list with kind tags,
+delta lines, effect text, story badge; inline editor (name, icon, kind seg-buttons, per-stat
+delta inputs, effect textarea) for authored actions; ⏹/▶ toggle for active ones; ✕ delete with
+confirm. Composer gets an **⚡** button that opens the hero panel straight onto Actions.
+`wireActionsTab` re-renders the PANEL ROOT (a tab-body re-render would nest the panel inside
+itself — caught by the harness, fixed).
+
+**Verified**: Node unit checks (strip parse, normalize, effective math, context text) +
+`tools/check-actions.js` e2e on the seeded kv stub — offer renders/accepts/persists, tab
+switches, buff badge `8 → 39 +31` (stacking, max-breaking), active toggle `9 → 11`, editor add,
+⚡ button. check-storage.js + check-imports.js still OK. Screenshots a01–a04.
+
+**Not covered (future)**: action costs/cooldowns, NPC actions, auto-expiry timers.
