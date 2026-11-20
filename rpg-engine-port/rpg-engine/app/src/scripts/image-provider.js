@@ -798,12 +798,16 @@ export function imageProviderControls(opts = {}) {
     remoteBox.hidden = isPerchance;
     guideRows.forEach((el) => { el.hidden = !isPerchance; });
     resRows.forEach((el) => { el.hidden = !isOpenRouter; });
-    box.querySelectorAll(".pf-img-baserow").forEach((el) => { el.hidden = isLw; });
-    const keyBox = box.querySelector(".pf-ai-keybox");
+    // Scope to remoteBox (a direct reference), NOT box: main.js spreads the box's
+    // children into the section after the builder returns, so `box` is an empty
+    // shell by the time any post-mount paint runs — box-scoped queries find nothing
+    // (the pre-existing reason row-state could only ever be set at build time).
+    remoteBox.querySelectorAll(".pf-img-baserow").forEach((el) => { el.hidden = isLw; });
+    const keyBox = remoteBox.querySelector(".pf-ai-keybox");
     if (keyBox) keyBox.hidden = isLw;
     if (modelListHint) modelListHint.hidden = !isLw || followOn;
-    box.querySelectorAll(".pf-img-followrow, .pf-img-followhint").forEach((el) => { el.hidden = !isLw; });
-    box.querySelectorAll(".pf-img-modelrow").forEach((el) => { el.hidden = followOn; });
+    remoteBox.querySelectorAll(".pf-img-followrow, .pf-img-followhint").forEach((el) => { el.hidden = !isLw; });
+    remoteBox.querySelectorAll(".pf-img-modelrow").forEach((el) => { el.hidden = followOn; });
     if (!statusEl.dataset.touched) {
       const entry = getImageProviderEntry(provEl.value);
       statusEl.textContent = !isPerchance && !isLw && !entry.hasKey && !keyEl.value.trim() ? "No key saved yet." : "";
