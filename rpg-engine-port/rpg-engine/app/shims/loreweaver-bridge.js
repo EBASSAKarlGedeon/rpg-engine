@@ -121,7 +121,13 @@
     });
     let r = await call(await getToken());
     if (r.status === 403) r = await call(await getToken(true)); // session may have rotated
-    if (!r.ok) throw new Error(path + " returned " + r.status);
+    if (!r.ok) {
+      // Surface the server's own error text — endpoints like /api/sd-follow/generate
+      // return actionable setup hints (e.g. the ComfyUI --listen note).
+      let detail = "";
+      try { const t = await r.text(); if (t && t !== "null") detail = " — " + t.slice(0, 400); } catch (e) {}
+      throw new Error(path + " returned " + r.status + detail);
+    }
     const text = await r.text();
     try { return JSON.parse(text); } catch (e) { return text; }
   }

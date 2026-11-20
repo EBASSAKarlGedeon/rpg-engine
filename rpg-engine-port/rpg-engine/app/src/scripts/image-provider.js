@@ -64,7 +64,7 @@ function readStore() {
     const em = typeof e.model === "string" ? e.model.trim() : "";
     providers[p.id] = { baseUrl: eb || p.baseUrl, model: em || p.model, opts: sanitizeImageOpts(e.opts) };
   }
-  return { provider, providers, useExternal: sanitizeImageUseExternal(s.useExternal) };
+  return { provider, providers, useExternal: sanitizeImageUseExternal(s.useExternal), follow: s.follow === true };
 }
 
 // Per-call routing: which image jobs may use the external provider. Every image
@@ -117,6 +117,7 @@ export function getImageConfig() {
     model: entry.model || preset.model || "",
     opts: sanitizeImageOpts(entry.opts),
     useExternal: sanitizeImageUseExternal(store.useExternal),
+    follow: store.follow === true,
   };
 }
 
@@ -137,6 +138,7 @@ export function saveImageConfig(cfg, key) {
   const ids = IMAGE_PROVIDERS.map((p) => p.id);
   const provider = ids.includes(cfg.provider) ? cfg.provider : "perchance";
   store.provider = provider;
+  if (cfg.follow !== undefined) store.follow = cfg.follow === true; // [rpge-patch 024] SD-follow
   if (cfg.useExternal !== undefined) store.useExternal = sanitizeImageUseExternal(Object.assign({}, store.useExternal, cfg.useExternal));
   if (provider !== "perchance") {
     const preset = getPreset(provider);
@@ -260,6 +262,9 @@ async function loreweaverGenImage(prompt, opts = {}) {
   const b = bridgeApi();
   if (!b) throw new Error("Loreweaver server bridge is not connected.");
   const cfg = getImageConfig();
+  // [rpge-patch 024] SD-follow: when the toggle is on, the server replays the
+  // user's chat-side Image Generation configuration (wave 1 = ComfyUI source).
+  if (cfg.follow) return followGenImage(b, prompt, opts);
   const aspect = aspectOf(opts.resolution);
   const body = {
     model: cfg.model || getPreset("loreweaver").model,
@@ -277,6 +282,33 @@ async function loreweaverGenImage(prompt, opts = {}) {
   const fmt = String(out.format || "png").toLowerCase();
   const mime = "image/" + (fmt === "jpg" || fmt === "jpeg" ? "jpeg" : fmt);
   return { dataUrl: `data:${mime};base64,${b64}`, provider: "loreweaver" };
+}
+
+// [rpge-patch 024] The follow call is deliberately thin: prompt + negative + aspect
+// in, image out. The server reads the extension's saved settings and drives the same
+// machinery the chat-side render would use, so the two systems can't drift apart.
+// Reference images have no follow equivalent yet (a workflow would need LoadImage
+// nodes); they are ignored, exactly like on the plain Loreweaver path.
+async function followGenImage(b, prompt, opts = {}) {
+  const body = {
+    prompt: String(prompt || ""),
+    negative_prompt: String(opts.negativePrompt || ""),
+    aspect: aspectOf(opts.resolution),
+  };
+  const out = await b.api("/api/sd-follow/generate", body);
+  const data = out && out.data;
+  if (!data) throw new Error("No image returned — check the Image Generation extension settings.");
+  const fmt = String(out.format || "png").toLowerCase();
+  const mime = "image/" + (fmt === "jpg" || fmt === "jpeg" ? "jpeg" : fmt);
+  return { dataUrl: `data:${mime};base64,${data}`, provider: "loreweaver" };
+}
+
+// Free probe for the Test button in follow mode: what the mirror sees + whether
+// ComfyUI answers. No generation, no spend.
+export async function followStatus() {
+  const b = bridgeApi();
+  if (!b) throw new Error("Loreweaver server bridge is not connected.");
+  return b.api("/api/sd-follow/status", {});
 }
 
 // The account's real image models on OpenRouter (server resolves the key).
@@ -586,7 +618,7 @@ export function imageProviderControls(opts = {}) {
       input[type="range"].mno-range::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #8B9A6E; border: 1px solid #00000088; box-shadow: 0 1px 4px rgba(0,0,0,.6); cursor: pointer; }
       input[type="range"].mno-range:hover::-moz-range-thumb { filter: brightness(1.2); }
       .pf-img-saved.is-warn { color: var(--warn); }
-      .pf-img-baserow[hidden], .pf-ai-keybox[hidden], .pf-img-modellist-row[hidden] { display: none; }
+      .pf-img-baserow[hidden], .pf-ai-keybox[hidden], .pf-img-modellist-row[hidden], .pf-img-modelrow[hidden], .pf-img-model[hidden], .pf-img-followrow[hidden], .pf-img-followhint[hidden] { display: none; }
       .pf-keyrow { flex-wrap: nowrap; align-items: stretch; }
       .pf-keyrow .mini { align-self: stretch; display: inline-flex; align-items: center; justify-content: center; }
       .pf-img-routelist .pf-img-routerow + .pf-img-routerow { margin-top: 12px; }
@@ -607,10 +639,12 @@ export function imageProviderControls(opts = {}) {
       <div class="pf-warn">⚠️ Your key is kept only in this browser and is sent only to your endpoint. Never paste it anywhere public.</div>
       <div class="pf-info">🔑 Shared key with AI Model.</div>
       </div>
-      <div class="pf-kv"><span class="pf-k">Model</span></div>
-      <input class="popup-in pf-img-model" autocomplete="off" spellcheck="false" list="pf-img-model-list">
+      <div class="pf-kv pf-img-modelrow"><span class="pf-k">Model</span></div>
+      <input class="popup-in pf-img-model pf-img-modelrow" autocomplete="off" spellcheck="false" list="pf-img-model-list">
       <datalist id="pf-img-model-list" class="pf-img-modellist"></datalist>
       <p class="pf-hint pf-img-modellist-row" hidden>The list is your account's real image models on the server.</p>
+      <div class="pf-kv pf-img-followrow"><span class="pf-k">Follow Image Gen</span><span class="pf-v pf-img-followsw"></span></div>
+      <p class="pf-hint pf-img-followhint">Render with whatever endpoint is configured in Loreweaver → Image Generation — one set of settings for chat and game (currently mirrored: ComfyUI source). While this is on, the Model field above is ignored.</p>
       <details class="foldbox pf-img-routes" open>
       <summary>External AI images</summary>
       <p class="pf-hint">Each image job below can use the provider above — or fall back to Perchance AI when switched off. Off is useful when the external model is worse at a job, or to save credits.</p>
@@ -760,13 +794,16 @@ export function imageProviderControls(opts = {}) {
     const isPerchance = provEl.value === "perchance";
     const isOpenRouter = provEl.value === "openrouter";
     const isLw = provEl.value === "loreweaver";
+    const followOn = isLw && followMount && followMount.dataset.on === "1";
     remoteBox.hidden = isPerchance;
     guideRows.forEach((el) => { el.hidden = !isPerchance; });
     resRows.forEach((el) => { el.hidden = !isOpenRouter; });
     box.querySelectorAll(".pf-img-baserow").forEach((el) => { el.hidden = isLw; });
     const keyBox = box.querySelector(".pf-ai-keybox");
     if (keyBox) keyBox.hidden = isLw;
-    if (modelListHint) modelListHint.hidden = !isLw;
+    if (modelListHint) modelListHint.hidden = !isLw || followOn;
+    box.querySelectorAll(".pf-img-followrow, .pf-img-followhint").forEach((el) => { el.hidden = !isLw; });
+    box.querySelectorAll(".pf-img-modelrow").forEach((el) => { el.hidden = followOn; });
     if (!statusEl.dataset.touched) {
       const entry = getImageProviderEntry(provEl.value);
       statusEl.textContent = !isPerchance && !isLw && !entry.hasKey && !keyEl.value.trim() ? "No key saved yet." : "";
@@ -796,6 +833,7 @@ export function imageProviderControls(opts = {}) {
       model: modelEl.value,
       opts: { resolution: resEl.value, quality: qualityEl.value },
       useExternal: readRoutes(),
+      follow: followMount.dataset.on === "1",
     }, typedKey ? typedKey : undefined);
     refreshUsingLine(next);
     try { window.dispatchEvent(new Event("mno:imagegen-changed")); } catch (e) {}
@@ -811,6 +849,25 @@ export function imageProviderControls(opts = {}) {
   keyEl.addEventListener("input", persist);
   resEl.onchange = persist;
   qualityEl.onchange = persist;
+  // [rpge-patch 024] SD-follow toggle (loreweaver provider only): render through
+  // the server's mirror of the chat-side Image Generation settings instead of the
+  // fixed OpenRouter image endpoint. Global (not per provider entry), like routes.
+  const followMount = box.querySelector(".pf-img-followsw");
+  followMount.dataset.on = cfg.follow ? "1" : "";
+  const followSw = switchEl({
+    on: () => followMount.dataset.on === "1",
+    set: (on) => { followMount.dataset.on = on ? "1" : ""; },
+    text: followMount.dataset.on === "1" ? "On" : "Off",
+    plain: true,
+    onChange: () => {
+      followSw.paint();
+      followSw.setLabel(followMount.dataset.on === "1" ? "On" : "Off");
+      statusEl.dataset.touched = "";
+      statusEl.textContent = "";
+      persist();
+    }
+  });
+  followMount.appendChild(followSw.el);
   loadEntry(cfg.provider);
   paint();
   refreshUsingLine(getImageConfig());
@@ -859,8 +916,19 @@ export function imageProviderControls(opts = {}) {
     statusEl.textContent = "Testing…";
     try {
       if (provEl.value === "loreweaver") {
-        await testImageConnection("", "", "loreweaver");
-        statusEl.textContent = "✓ Connected — the server's key is valid.";
+        if (followMount.dataset.on === "1") {
+          const st = await followStatus();
+          if (!st.ok) {
+            statusEl.textContent = st.source !== "comfy"
+              ? "⚠ Follow is on, but the Image Generation source is " + (st.source || "(none)") + " — set it to ComfyUI (wave 1)."
+              : "⚠ ComfyUI unreachable at " + (st.comfy_url || "(no URL)") + " — start it with --listen 0.0.0.0 and check the URL.";
+          } else {
+            statusEl.textContent = "✓ Following Image Generation (" + (st.workflow || "workflow") + ") — ComfyUI reachable.";
+          }
+        } else {
+          await testImageConnection("", "", "loreweaver");
+          statusEl.textContent = "✓ Connected — the server's key is valid.";
+        }
       } else {
         const key = keyEl.value.trim() || (getImageProviderEntry(provEl.value).hasKey ? getAiKeyFor(provEl.value) : "");
         if (!key) throw new Error("Enter an API key first.");
