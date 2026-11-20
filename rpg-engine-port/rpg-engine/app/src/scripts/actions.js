@@ -8,8 +8,6 @@
 // Segments: name | kind(optional, default passive) | deltas(optional) | effect(optional);
 // a segment starting with "icon:" supplies the icon; "source" is "story" for stripped ones.
 
-import { clampStat } from "./stats.js";
-
 const ACTION_STRIP_RE = /^\s*\[ACTION:\s*(.+?)\s*\]\s*$/i;
 let actionSeq = 0;
 
@@ -65,7 +63,9 @@ export function parseActionStrips(rawText) {
 }
 
 // The stat values the world actually plays with: base + passive deltas + (active deltas while on).
-// Returns a fresh object; never mutates the character.
+// Returns a fresh object; never mutates the character. Buffs deliberately EXCEED the world's stat
+// max (the max is a creation budget — being buffed is the point); only the LOW side is clamped
+// to the stat's min so a curse can't push a stat under 1.
 export function effectiveStats(character, statDefs) {
   const base = (character && character.stats) || {};
   const out = { ...base };
@@ -76,7 +76,8 @@ export function effectiveStats(character, statDefs) {
     for (const k of Object.keys(a.deltas || {})) out[k] = (Number(out[k]) || 0) + Number(a.deltas[k]);
   }
   for (const d of statDefs || []) {
-    if (out[d.key] !== undefined) out[d.key] = clampStat(out[d.key], d);
+    const min = Number(d && d.min);
+    if (out[d.key] !== undefined && Number.isFinite(min) && out[d.key] < min) out[d.key] = min;
   }
   return out;
 }

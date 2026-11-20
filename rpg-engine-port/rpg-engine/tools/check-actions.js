@@ -17,11 +17,11 @@ const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems
   // would have stamped it) plus one accepted passive card earlier in the session.
   s.character.stats = { str: 12, wit: 9 };
   s.character.actions = [
-    { id: "act-seed", name: "Iron Stomach", icon: "🍖", kind: "passive", deltas: { str: 1 }, effect: "Raw food never sickens you.", active: false, source: "hero" }
+    { id: "act-seed", name: "Iron Stomach", icon: "🍖", kind: "passive", deltas: { grit: 1 }, effect: "Raw food never sickens you.", active: false, source: "hero" }
   ];
   const lastMsg = s.messages[s.messages.length - 1];
   lastMsg.actionGains = [
-    { name: "All Enhancement", icon: "✨", kind: "passive", deltas: { str: 30 }, effect: "Ten times stronger than baseline; metal bends to your hands." }
+    { name: "All Enhancement", icon: "✨", kind: "passive", deltas: { grit: 30 }, effect: "Ten times stronger than baseline; metal bends to your hands." }
   ];
   put("worlds", "wstress", makeWorld());
   put("worlds", "index", [{ id: "wstress", name: "Stress Test Valley", cover: "", tags: [], description: "test", nsfw: false, author: "", authorId: "", remix: null, origin: "", createdAt: "2026-01-01", updatedAt: "2026-01-01" }]);
@@ -55,7 +55,7 @@ const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems
   await page.evaluate(() => { [...document.querySelectorAll(".act-offer .act-accept")].find(b => b.offsetParent).click(); });
   await page.waitForTimeout(1200);
   const stored = readChar();
-  ok(stored && (stored.actions || []).some((a) => a.name === "All Enhancement" && a.source === "story" && a.deltas.str === 30), "accepted action persisted with source=story");
+  ok(stored && (stored.actions || []).some((a) => a.name === "All Enhancement" && a.source === "story" && a.deltas.grit === 30), "accepted action persisted with source=story");
   const offerAfter = await page.evaluate(() => {
     const el = [...document.querySelectorAll(".act-offer")].find((o) => o.textContent.includes("All Enhancement"));
     return el ? el.classList.contains("accepted") : null;
@@ -79,7 +79,7 @@ const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems
   }));
   ok(tabState.activeTab === "Actions", "Actions tab is active");
   ok(tabState.cards.some((t) => t.includes("All Enhancement")) && tabState.cards.some((t) => t.includes("Iron Stomach")), "both action cards listed");
-  ok(tabState.statsShown.some((t) => t.includes("→ 42") && t.includes("+30")), "str row shows base 12 → 42 with buff badge");
+  ok(tabState.statsShown.some((t) => t.includes("→ 38") && t.includes("+30")), "grit row shows base 8 → 38 (buff breaks the world max) with +30 badge");
   await page.screenshot({ path: SHOT + "a02-stats-buffed.png", clip: { x: 680, y: 0, width: 320, height: 700 } });
   // toggle the seeded active? none active — add a new ACTIVE action via the editor.
   await page.evaluate(() => { document.querySelector(".act-add").click(); });
