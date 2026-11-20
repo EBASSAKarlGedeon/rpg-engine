@@ -723,3 +723,43 @@ no `window.__pwned*` flags set, no `img[onerror]`/`<script>` survived the saniti
 
 **Not covered (future)**: `chatMd` (Discussion page) stays plain-markdown-only — out of scope
 unless requested. Preset system / macro expansion / regex engine are separate patches (021/022/023).
+
+### [rpge-patch 021] Regex engine port (2026-11-21)
+Second patch in the preset-intake series (see `PRESET-PLAN.md`). New module
+`app/src/scripts/regex.js` — a self-contained port of Loreweaver's
+`public/scripts/extensions/regex/engine.js`. That file reaches into ST globals the engine
+doesn't have (`script.js` `substituteParams`, `extensions.js` `extension_settings`,
+`preset-manager.js`, `lodash`), so this keeps the *behavior* faithful and swaps the surroundings:
+
+- **Ported faithfully**: `RegexProvider` (LRU compiled-`RegExp` cache, size 1000, `lastIndex`
+  reset on global/sticky so cache reuse can't skip matches), `regexFromString` (`/pattern/flags`
+  parsing with the same invalid-flag fallback as `public/scripts/utils.js`),
+  `sanitizeRegexMacro` (regex-escape set for the ESCAPED substitute mode),
+  `substitute_find_regex` enum (NONE/RAW/ESCAPED), `regex_placement` enum (MD_DISPLAY,
+  USER_INPUT, AI_OUTPUT, SLASH_COMMAND, WORLD_INFO, REASONING — same numeric values as ST),
+  `runRegexScript` (`{{match}}`→`$0`, `$1`/`$<name>` capture-group refs, `trimStrings`
+  post-match filtering, final macro expansion), `filterString`, and `getRegexedString`'s gate
+  (placement match, markdownOnly/promptOnly mutual-exclusion — including the "neither flag runs
+  only when input is neither markdown nor prompt" rule — `runOnEdit` gate, `minDepth`/`maxDepth`
+  window).
+- **Swapped for engine-native**: scripts come in as a plain `scripts[]` argument instead of ST's
+  `extension_settings.regex`/character-scoped/preset-scoped storage lookups (that storage layer is
+  deliberately NOT ported — the engine manages its own script storage in a later patch, so this
+  module stays pure JS, no DOM, unit-testable in plain Node); macro expansion uses the engine's
+  own `{{user}}` convention (`subUser` from `text-utils.js`, resolving the hero's name) via a
+  small `expandMacros` helper, instead of ST's full `substituteParams` universe. A caller can
+  extend macros via `params.macros` (e.g. inject `{{char}}` for a specific NPC at a call site
+  that knows one). Unknown `{{…}}` macros are left as literal text, not silently dropped.
+
+**Verified**: `tools/check-regex.js` — 40/40 checks green as plain Node unit tests (no browser
+needed, unlike `rich-text.js`): `/pattern/flags` parsing + invalid-flag fallback,
+`sanitizeRegexMacro` escaping, numbered + named capture groups, `{{match}}` shorthand,
+`trimStrings`, `{{user}}` expansion (with and without a `macros` override), all three
+`substituteRegex` modes (incl. proving ESCAPED is real escaping, not just RAW — `a.b` matches
+literally, not `axb`), disabled/invalid-script graceful degradation, `regex_placement` gating,
+markdownOnly/promptOnly mutual exclusion (all 6 permutations), `runOnEdit` gating,
+`minDepth`/`maxDepth` window, `RegexProvider` LRU cache reuse + `lastIndex` reset, and
+ordered multi-script chaining.
+
+**Not covered (future)**: script storage/UI (likely world-level regex rules, a later patch).
+Preset system + macro universe + FF 5.4 Engine Edition preset data remain patches 022/023.
