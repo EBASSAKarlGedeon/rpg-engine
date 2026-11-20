@@ -10,6 +10,7 @@ const { makeWorld, makeSession } = require("./test-seeds.js");
 const APP_URL = "http://127.0.0.1:8000/scripts/extensions/third-party/rpg-engine/rpg-engine-port/rpg-engine/app/index.html";
 const b64url = (s) => Buffer.from(s, "utf8").toString("base64url");
 const SHOT = "C:/Users/Gedeon/AppData/Local/Temp/rpge-heavy/";
+require("fs").mkdirSync(SHOT, { recursive: true });
 const problems = [];
 const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems.push(msg); console.log("  FAIL:", msg); } };
 
@@ -68,6 +69,19 @@ const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems
     if (op === "delete") { kv.set(body.name.replace(/\.json$/, "") + ".tomb.json", JSON.stringify({ deletedAt: 1700000000000 })); kv.delete(body.name); return r.fulfill({ json: { ok: true, mtimeMs: 1700000000000 } }); }
     return r.fulfill({ json: { ok: true } });
   });
+  // [rpge-patch 021 followup] Serve a real 1x1 PNG at the fixture's /user/images/ path — that
+  // URL used to point at a file that never existed on the server (404), so the <img> tag rendered
+  // with correct src/alt attributes but loaded ZERO pixels. The old assertion only checked
+  // getAttribute("src")/getAttribute("alt") and never noticed. This route makes the fixture honest
+  // (real bytes, real load) without polluting the real user/images/ directory with test files.
+  await page.route("**/user/images/**", async (r) => {
+    const url = r.request().url();
+    if (!/Great_Sage\.png/i.test(url)) return r.fulfill({ status: 404, body: "" });
+    // Solid magenta 64x64 PNG (generated, real decodable pixels) — visible in screenshots so a
+    // human eyeball can confirm the image displays, not just the automated naturalWidth check.
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAl0lEQVR4nO3QMREAIAzAwMrBv556ARk/kOH3XGbP3p+NDtAaoAO0BugArQE6QGuADtAaoAO0BugArQE6QGuADtAaoAO0BugArQE6QGuADtAaoAO0BugArQE6QGuADtAaoAO0BugArQE6QGuADtAaoAO0BugArQE6QGuADtAaoAO0BugArQE6QHvU5fKk1LXJBwAAAABJRU5ErkJggg==", "base64");
+    return r.fulfill({ status: 200, contentType: "image/png", body: png });
+  });
 
   // Boot once to get the app shell up (first boot's writes clobber activeSession).
   const bootOnce = async () => {
@@ -114,10 +128,11 @@ const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems
   ok(!gfx.hasLiteralAngleBrackets, "no literal '<div' text visible — markup was rendered, not escaped");
 
   console.log("2) inline images render (both URL forms)");
-  const imgs = await page.evaluate(() => [...document.querySelectorAll(".msg-img")].map(i => ({ src: i.getAttribute("src"), alt: i.getAttribute("alt") })));
-  ok(imgs.some(i => i.src === "/user/images/Test/Great_Sage.png" && i.alt.includes("Great Sage")), "/user/images/ path image rendered with alt text");
-  ok(imgs.some(i => i.src.startsWith("https://ella.janitorai.com/")), "external https:// image rendered");
+  const imgs = await page.evaluate(() => [...document.querySelectorAll(".msg-img")].map(i => ({ src: i.getAttribute("src"), alt: i.getAttribute("alt"), complete: i.complete, w: i.naturalWidth, h: i.naturalHeight })));
+  ok(imgs.some(i => i.src === "/user/images/Test/Great_Sage.png" && i.alt.includes("Great Sage") && i.complete && i.w > 0 && i.h > 0), "/user/images/ path image rendered WITH real pixels loaded (complete=true, naturalWidth>0) — not just the right DOM attrs");
+  ok(imgs.some(i => i.src.startsWith("https://ella.janitorai.com/") && i.complete && i.w > 0 && i.h > 0), "external https:// image rendered WITH real pixels loaded");
   ok(imgs.length >= 2, `at least 2 inline images rendered (got ${imgs.length})`);
+  ok(imgs.every(i => i.complete && i.w > 0 && i.h > 0), `EVERY visible inline image actually loaded real pixels — zero silent broken images (checked: ${JSON.stringify(imgs.map(i => ({ src: i.src, w: i.w, h: i.h, complete: i.complete })))})`);
 
   console.log("3) hostile fixture leaks no executable payload");
   const hostile = await page.evaluate(() => ({
