@@ -46,7 +46,12 @@ function readStore() {
     profileName: typeof s.profileName === "string" ? s.profileName : "",
     allowReasoning: s.allowReasoning === true,
     thinkingBudget: sanitizeBudget(s.thinkingBudget),
-    useExternal: sanitizeUseExternal(s.useExternal)
+    useExternal: sanitizeUseExternal(s.useExternal),
+    // [rpge-patch 022 followup] Optional response-tuning overrides (Settings → AI Model →
+    // Response tuning). Blank/"" = unset → the connection profile (or its preset) decides.
+    samplers: sanitizeSamplers(s.samplers),
+    maxReplyTokens: sanitizeOptInt(s.maxReplyTokens),
+    streaming: s.streaming !== false
   };
 }
 
@@ -93,6 +98,50 @@ function sanitizeUseExternal(v) {
   const out = {};
   for (const id of AI_ROUTE_IDS) out[id] = o[id] !== false;
   return out;
+}
+
+// [rpge-patch 022 followup] Sampler override fields: number, or "" = unset (profile decides).
+export const SAMPLER_FIELDS = ["temperature", "top_p", "top_k", "frequency_penalty", "presence_penalty"];
+function sanitizeSamplers(v) {
+  const o = v && typeof v === "object" ? v : {};
+  const out = {};
+  for (const k of SAMPLER_FIELDS) {
+    if (o[k] === "" || o[k] === undefined || o[k] === null) { out[k] = ""; continue; }
+    const n = parseFloat(o[k]);
+    out[k] = Number.isFinite(n) ? n : "";
+  }
+  return out;
+}
+function sanitizeOptInt(v) {
+  if (v === "" || v === undefined || v === null) return "";
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.min(128000, Math.max(1, n)) : "";
+}
+
+// The response-tuning overrides, or {} with all-"" values when unset. The bridge shim only
+// fills sampler fields the payload does NOT set, so a value here always wins over the
+// connection profile's preset sampling — blank truly means "profile decides".
+export function getSamplerOverrides() {
+  return sanitizeSamplers(readStore().samplers);
+}
+// Max response tokens override for the GM narration call only (0/"" = the engine's own
+// per-route caps apply — deliberately NOT the bookkeeping calls, whose small caps protect
+// the machine-output shape).
+export function getMaxReplyTokensOverride() {
+  return sanitizeOptInt(readStore().maxReplyTokens);
+}
+// Streaming transport toggle (default on). Off sends stream:false — the reply arrives as one
+// JSON body (the parser already handles both content types).
+export function getStreamingOn() {
+  return readStore().streaming !== false;
+}
+export function setResponseTuning(patch) {
+  const store = readStore();
+  if (patch && patch.samplers !== undefined) store.samplers = sanitizeSamplers(Object.assign({}, store.samplers, patch.samplers));
+  if (patch && patch.maxReplyTokens !== undefined) store.maxReplyTokens = sanitizeOptInt(patch.maxReplyTokens);
+  if (patch && patch.streaming !== undefined) store.streaming = patch.streaming !== false;
+  writeStore(store);
+  return { samplers: store.samplers, maxReplyTokens: store.maxReplyTokens, streaming: store.streaming };
 }
 
 // ---- shared per-provider API keys (IMAGE providers only since patch 018) ----
@@ -289,9 +338,18 @@ function bridgeGenText(norm, route) {
     const userContent = await instructionToContent(norm.instruction);
     const messages = [{ role: "user", content: userContent }];
     if (startWith) messages.push({ role: "assistant", content: startWith });
-    const body = { model: "loreweaver", messages, stream: true };
+    const body = { model: "loreweaver", messages, stream: getStreamingOn() };
     const cap = maxTokensFor(norm);
-    if (cap > 0) body.max_tokens = cap;
+    // [rpge-patch 022 followup] Response tuning: the GM narration call may take a user-set
+    // reply cap (bookkeeping calls keep their engine caps); sampler fields always win over
+    // the bridge's profile fills (the shim only fills fields the payload leaves unset).
+    const replyOverride = getMaxReplyTokensOverride();
+    if (route === "gm" && replyOverride) body.max_tokens = replyOverride;
+    else if (cap > 0) body.max_tokens = cap;
+    const samplers = getSamplerOverrides();
+    for (const k of SAMPLER_FIELDS) {
+      if (typeof samplers[k] === "number") body[k] = samplers[k];
+    }
     if (Array.isArray(norm.stopSequences) && norm.stopSequences.length) body.stop = norm.stopSequences.slice(0, 4);
     else if (typeof norm.stopSequences === "string" && norm.stopSequences) body.stop = [norm.stopSequences];
     const post = (b) => fetch(getProvider("loreweaver").baseUrl + "/chat/completions", {
@@ -455,6 +513,10 @@ export function aiModelSection() {
       .pf-ai-routelist .pf-ai-routerow + .pf-ai-routerow { margin-top: 12px; }
       .pf-ai-routeall { border-bottom: 1px solid var(--border); padding-bottom: 12px; }
       .pf-ai-routes > .pf-hint { margin-bottom: 14px; }
+      /* [rpge-patch 022 followup] Response tuning grid */
+      .pf-ai-sampgrid { display: flex; flex-wrap: wrap; gap: 10px 16px; margin: 10px 0 4px; }
+      .pf-ai-sampgrid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+      .pf-ai-sampgrid input { max-width: 110px; }
     </style>
     <h3 class="pf-sec-title">AI Model</h3>
     <p class="pf-hint">Every AI call rides the Loreweaver server through one of your
@@ -480,6 +542,21 @@ export function aiModelSection() {
     <p class="pf-hint">How much of the model's context window the game may use per prompt — roughly
     your model's window (e.g. 32768, 65536, 131072). The game fills it with as much recent story +
     lore + memories as fits. Too high for the actual model: the API truncates or errors.</p>
+    <details class="foldbox pf-ai-samp">
+    <summary>Response tuning (optional)</summary>
+    <p class="pf-hint">Sampler overrides the game sends on <b>every</b> call. <b>Blank = the
+    connection profile (or its preset sampling) decides</b> — exactly today's behavior. A number
+    here always wins, so use it when you want this game to sound different from the chat's setup.</p>
+    <div class="pf-ai-sampgrid">
+      <label>Temperature <input class="popup-in pf-ai-samp" data-k="temperature" type="number" min="0" max="4" step="0.01" placeholder="default"></label>
+      <label>Top P <input class="popup-in pf-ai-samp" data-k="top_p" type="number" min="0" max="1" step="0.01" placeholder="default"></label>
+      <label>Top K <input class="popup-in pf-ai-samp" data-k="top_k" type="number" min="0" max="200" step="1" placeholder="default"></label>
+      <label>Frequency penalty <input class="popup-in pf-ai-samp" data-k="frequency_penalty" type="number" min="-2" max="2" step="0.01" placeholder="default"></label>
+      <label>Presence penalty <input class="popup-in pf-ai-samp" data-k="presence_penalty" type="number" min="-2" max="2" step="0.01" placeholder="default"></label>
+      <label>Max reply tokens <input class="popup-in pf-ai-samp" id="pfAiMaxReply" type="number" min="1" max="128000" step="64" placeholder="default"></label>
+    </div>
+    <div class="pf-kv" style="border-bottom:none;padding-bottom:0"><span class="pf-k">${infoTipLabelHtml("Streaming", "Whether replies arrive word-by-word as the model writes (live typing) or all at once when finished. Streaming is usually nicer AND safer — a stalled connection is visible sooner.")}</span><span class="pf-v pf-ai-stream"></span></div>
+    </details>
     <details class="foldbox pf-ai-routes" open>
     <summary>External AI calls</summary>
     <p class="pf-hint">Each job below rides the Loreweaver bridge — or, when switched off, DOESN'T
@@ -579,6 +656,33 @@ export function aiModelSection() {
     ctxEl.value = bridge.contextTokens;
     persistBridge();
   });
+
+  // [rpge-patch 022 followup] Response tuning: blank = profile decides; a number always wins
+  // (the bridge only fills unset fields). Max reply tokens applies to the GM narration call
+  // only — bookkeeping calls keep their engine caps.
+  const sampEls = [...sec.querySelectorAll(".pf-ai-samp")];
+  const maxReplyEl = sec.querySelector("#pfAiMaxReply");
+  const tuning0 = (typeof getSamplerOverrides === "function") ? { samplers: getSamplerOverrides(), maxReplyTokens: getMaxReplyTokensOverride(), streaming: getStreamingOn() } : null;
+  if (tuning0) {
+    for (const el of sampEls) {
+      const v = tuning0.samplers[el.dataset.k];
+      if (typeof v === "number") el.value = v;
+    }
+    if (tuning0.maxReplyTokens) maxReplyEl.value = tuning0.maxReplyTokens;
+    const swStream = switchEl({
+      on: () => getStreamingOn(),
+      set: (on) => { setResponseTuning({ streaming: on }); },
+      text: getStreamingOn() ? "On" : "Off",
+      plain: true
+    });
+    sec.querySelector(".pf-ai-stream").appendChild(swStream.el);
+  }
+  const persistTuning = () => {
+    const samplers = {};
+    for (const el of sampEls) samplers[el.dataset.k] = el.value === "" ? "" : el.value;
+    setResponseTuning({ samplers, maxReplyTokens: maxReplyEl.value });
+  };
+  for (const el of [...sampEls, maxReplyEl]) el.addEventListener("change", persistTuning);
 
   // Per-job profile selects (the bridge shim's ROLE_IDS, minus "main").
   const ROLE_IDS = (B() && B().ROLE_IDS) || ["gm", "check", "staging", "tracker", "npc", "scene", "memory", "npclife", "other", "cheap"];

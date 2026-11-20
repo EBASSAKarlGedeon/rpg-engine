@@ -3738,6 +3738,11 @@
   .pf-preset .ps-edit-row select { background: var(--panel2); border: 1px solid var(--border); color: var(--text); padding: 5px 8px; font: inherit; font-size: 13px; border-radius: 2px; }
   .pf-preset .ps-content { width: 100%; box-sizing: border-box; background: var(--panel2); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; font: inherit; font-size: 13px; line-height: 1.5; border-radius: 2px; resize: vertical; min-height: 120px; }
   .pf-preset .ps-edit-acts { display: flex; gap: 8px; }
+  .pf-preset .pf-ps-librow select { max-width: 260px; }
+  .pf-preset .ps-orph { margin: 6px 0 0; }
+  .pf-preset .ps-orph > summary { font-size: 12.5px; color: var(--muted); cursor: pointer; padding: 4px 0; }
+  .pf-preset .ps-orph > summary:hover { color: var(--text); }
+  .pf-preset .ps-orph[open] > summary { border-bottom: 1px solid var(--border); margin-bottom: 6px; padding-bottom: 6px; }
 
   .pf-ai-ollama { margin: 6px 0; }
   /* Reusable foldout box: a bordered <details> with the <summary> as its header row.

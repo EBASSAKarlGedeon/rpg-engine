@@ -139,33 +139,72 @@ let currentWorldThreadFires = true; // [rpge-patch 013] the bound world's thread
 let currentWorldSceneDice = true; // [rpge-patch 014] the bound world's scene-dice toggle (world.sceneDice !== false)
 let engineImagePrompt = ""; // the engine's default scene-image prompt (image-prompt.md) — the fallback for worlds without imagePrompt
 
-// ---- prompt-stack preset ([rpge-patch 022]) -------------------------------------------------
-// The loaded preset is a machine-local localStorage blob (same tier as the AI provider prefs:
-// a per-device authoring choice, not story data, so it stays out of the session saves). `raw`
-// holds the imported ST preset JSON verbatim (Export round-trips it), `on` gates the stack.
-const PRESET_STORE_KEY = "rpge.promptPreset";
-let presetStore = (function () {
-  try {
-    const s = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "null");
-    if (s && typeof s === "object") return { raw: typeof s.raw === "string" ? s.raw : "", name: typeof s.name === "string" ? s.name : "", on: s.on === true };
-  } catch (e) {}
-  return { raw: "", name: "", on: false };
-})();
-let presetParsed = null; // parsePresetJson(presetStore.raw).preset when the blob is a valid preset
-function reparsePreset() {
-  const r = presetStore.raw ? parsePresetJson(presetStore.raw) : null;
-  presetParsed = (r && r.ok) ? r.preset : null;
-  if (r && !r.ok) console.warn("[rpge] stored preset no longer parses:", r.errors);
+// ---- prompt-stack preset ([rpge-patch 022], library [rpge-patch 022 followup]) -------------
+// The preset LIBRARY lives in kv.rpg under "promptPresets" — the session folder the server
+// mirror syncs (MIRROR_FOLDERS), so imported presets follow the user across devices the same
+// way sessions/worlds do (offline-capable: the kv plugin is IndexedDB-backed, the mirror
+// reconciles with the server when it's reachable). Blob shape:
+//   { presets: [{ name, raw }], active: "name", on: bool }
+// `raw` holds that preset's ST JSON verbatim (Export round-trips it); `active` picks which
+// library entry plays; `on` gates the stack. If the kv shim is missing (bare standalone run)
+// the same blob falls back to localStorage under the legacy key.
+const PRESET_LIB_KEY = "promptPresets";
+const PRESET_LEGACY_KEY = "rpge.promptPreset"; // pre-library single-preset store — migrated once
+let presetLib = { presets: [], active: "", on: false };
+let presetParsed = null; // parsePresetJson(active raw).preset when valid
+function presetKvFolder() {
+  try { if (window.kv && window.kv.rpg) return window.kv.rpg; } catch (e) {}
+  return null;
 }
-function savePresetStore() {
-  try { localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(presetStore)); } catch (e) { console.warn("[rpge] could not persist the preset:", e); }
+function presetLibFromBlob(v) {
+  if (!v || typeof v !== "object" || !Array.isArray(v.presets)) return null;
+  const presets = v.presets
+    .filter((p) => p && typeof p === "object" && typeof p.name === "string" && p.name && typeof p.raw === "string" && p.raw)
+    .map((p) => ({ name: p.name, raw: p.raw }));
+  const names = new Set(presets.map((p) => p.name));
+  const active = typeof v.active === "string" && names.has(v.active) ? v.active : "";
+  return { presets, active, on: v.on === true };
+}
+async function savePresetLib() {
+  const folder = presetKvFolder();
+  try {
+    if (folder) await folder.set(PRESET_LIB_KEY, presetLib);
+    else localStorage.setItem(PRESET_LEGACY_KEY, JSON.stringify(Object.assign({ __lib: true }, presetLib)));
+  } catch (e) { console.warn("[rpge] could not persist the preset library:", e); }
+}
+async function loadPresetLib() {
+  let blob = null;
+  const folder = presetKvFolder();
+  if (folder) {
+    try { blob = presetLibFromBlob(await folder.get(PRESET_LIB_KEY)); } catch (e) { console.warn("[rpge] preset library read failed:", e); }
+  }
+  if (!blob) {
+    // Migration: the pre-library single preset (localStorage {raw, name, on}) becomes library
+    // entry #1, active and on. Cleared afterwards so there's exactly one source of truth.
+    try {
+      const legacy = JSON.parse(localStorage.getItem(PRESET_LEGACY_KEY) || "null");
+      if (legacy && typeof legacy.raw === "string" && legacy.raw) {
+        blob = { presets: [{ name: legacy.name || "Imported preset", raw: legacy.raw }], active: legacy.name || "Imported preset", on: legacy.on === true };
+        if (folder) { try { await folder.set(PRESET_LIB_KEY, blob); } catch (e) {} }
+        try { localStorage.removeItem(PRESET_LEGACY_KEY); } catch (e) {}
+      }
+    } catch (e) {}
+  }
+  if (blob) presetLib = blob;
+  reparsePreset();
+  applyPresetToEngine();
+}
+function reparsePreset() {
+  const entry = presetLib.presets.find((p) => p.name === presetLib.active) || null;
+  const r = entry && entry.raw ? parsePresetJson(entry.raw) : null;
+  presetParsed = (r && r.ok) ? r.preset : null;
+  if (r && !r.ok) console.warn("[rpge] active preset no longer parses:", r.errors);
 }
 // The engine gets the parsed preset only while the toggle is on; null = engine-native prompting.
-function presetForEngine() { return (presetStore.on && presetParsed) ? presetParsed : null; }
+function presetForEngine() { return (presetLib.on && presetParsed) ? presetParsed : null; }
 // Live-apply onto an already-running engine so a toggle/import while playing takes effect on the
 // next turn (same seam applyWorld uses when building a fresh engine for a session).
 function applyPresetToEngine() { if (engine) engine.preset = presetForEngine(); }
-reparsePreset();
 let worldNameCache = {}; // worldId -> display name, for session rows (refreshed with the library)
 let gameTitle = "MNO RPG ENGINE"; // the page title from $meta (the chat topbar brand + the nav brand)
 const MNO_USER_ID = "3490f80401886d12";
@@ -537,6 +576,10 @@ async function init() {
   engineImagePrompt = ip;
   defaultWorld = (await loadBundledWorlds()) || emptyWorld();
   applyWorld(defaultWorld);
+  // [rpge-patch 022 followup] The syncable preset library loads beside boot; when it lands it
+  // flips the running engine over itself (applyPresetToEngine), so the first turn already plays
+  // with the stack whether or not this await finished before applyWorld built the engine.
+  loadPresetLib().catch((e) => console.warn("[rpge] preset library failed to load:", e));
 
   const sessions = await store.list();
 
@@ -3171,13 +3214,15 @@ function presetSection() {
     const g = presetParsed.data.prompt_order || [];
     return g.find((x) => x && x.character_id === 100001) || g.find((x) => Array.isArray(x.order)) || null;
   };
-  // Persist + live-apply: every mutation lands here. Re-serializes the edited data, re-parses so
-  // the engine's Map/order views rebuild, saves the blob, flips any running engine over.
+  // Persist + live-apply: every mutation lands here. Re-serializes the edited data back into the
+  // active LIBRARY entry, re-parses so the engine's Map/order views rebuild, saves the synced
+  // blob, flips any running engine over.
   const commit = () => {
     if (!presetParsed) return;
-    presetStore.raw = JSON.stringify(presetParsed.data);
+    const entry = presetLib.presets.find((p) => p.name === presetLib.active);
+    if (entry) entry.raw = JSON.stringify(presetParsed.data);
     reparsePreset();
-    savePresetStore();
+    savePresetLib();
     applyPresetToEngine();
   };
   const promptById = (id) => (presetParsed ? (presetParsed.data.prompts || []).find((p) => p && p.identifier === id) : null);
@@ -3190,49 +3235,114 @@ function presetSection() {
     const count = presetParsed ? presetParsed.order.filter((e) => e.enabled !== false).length : 0;
     const group = orderGroup();
     const entries = (group && Array.isArray(group.order)) ? group.order : [];
+    // Orphaned blocks: in the file but NOT in the play order (ST's "out of order" clones + any
+    // block removed from the order). Invisible in the pre-followup editor; now a collapsed group
+    // with an add-to-order action. Markers among them stay engine slots (nothing to add).
+    const orderIds = new Set(entries.map((e) => e.identifier));
+    const orphans = presetParsed ? (presetParsed.data.prompts || []).filter((p) => p && p.identifier && !orderIds.has(p.identifier)) : [];
+    const libOpts = presetLib.presets.map((p) => `<option value="${esc(p.name)}"${p.name === presetLib.active ? " selected" : ""}>${esc(p.name)}</option>`).join("");
+    const badgesHtml = (p) => {
+      const isMarker = p.marker === true;
+      return [
+        p.role ? String(p.role) : "",
+        p.injection_position === 1 ? "in-chat" : "",
+        isMarker ? "engine slot" : "",
+      ].filter(Boolean).map((b) => `<span class="ps-badge${isMarker ? " ps-mk" : ""}${p.injection_position === 1 ? " ps-abs" : ""}">${esc(b)}</span>`).join("");
+    };
+    // The shared content editor (name/role/textarea) — one shape for play-order rows and orphans.
+    const editBlockHtml = (p) => `
+        <div class="ps-edit" data-id="${esc(p.identifier)}">
+          <div class="ps-edit-row"><label>Name <input class="ps-name-in" data-id="${esc(p.identifier)}" value="${esc(p.name || "")}"></label>
+          <label>Role <select class="ps-role" data-id="${esc(p.identifier)}">${["system", "user", "assistant"].map((r) => `<option value="${r}"${(p.role || "system") === r ? " selected" : ""}>${r}</option>`).join("")}</select></label></div>
+          <textarea class="ps-content" data-id="${esc(p.identifier)}" rows="10" placeholder="Block text — supports ST macros: {{user}}, {{setvar::key::value}}, {{getvar::key}}, {{roll::1d20}}, {{// comments}}…">${esc(p.content || "")}</textarea>
+          <div class="ps-edit-acts"><button type="button" class="mini ok ps-save" data-id="${esc(p.identifier)}">Save block</button><button type="button" class="mini ps-close">Close</button></div>
+        </div>`;
     const rows = entries.map((entry, idx) => {
       const p = promptById(entry.identifier);
       if (!p) return ""; // an order ref with no prompt block (ST tolerates it; nothing to show)
       const isMarker = p.marker === true;
       const isOpen = openId === entry.identifier;
-      const badges = [
-        p.role ? String(p.role) : "",
-        p.injection_position === 1 ? "in-chat" : "",
-        isMarker ? "engine slot" : "",
-      ].filter(Boolean).map((b) => `<span class="ps-badge${isMarker ? " ps-mk" : ""}${p.injection_position === 1 ? " ps-abs" : ""}">${esc(b)}</span>`).join("");
       return `
         <div class="ps-row${isMarker ? " ps-row-slot" : ""}${isOpen ? " ps-open" : ""}" data-id="${esc(entry.identifier)}">
           ${isMarker ? `<span class="ps-en" title="Engine-native slot — the engine fills this itself (character sheet, lorebook, transcript…)">—</span>` : `<input type="checkbox" class="ps-en" data-id="${esc(entry.identifier)}"${entry.enabled !== false ? " checked" : ""} title="Play this block">`}
           <button type="button" class="ps-name" data-id="${esc(entry.identifier)}" title="${isMarker ? "Engine-native slot (read-only)" : "View / edit block content"}">${esc(p.name || entry.identifier)}</button>
-          ${badges}
+          ${badgesHtml(p)}
           <span class="ps-tools">
             <button type="button" class="mini ps-up" data-id="${esc(entry.identifier)}" title="Move up"${idx === 0 ? " disabled" : ""}>▲</button>
             <button type="button" class="mini ps-down" data-id="${esc(entry.identifier)}" title="Move down"${idx === entries.length - 1 ? " disabled" : ""}>▼</button>
             <button type="button" class="mini ps-del" data-id="${esc(entry.identifier)}" title="Delete block"${isMarker ? " disabled" : ""}>✕</button>
           </span>
         </div>
-        ${isOpen && !isMarker ? `
-        <div class="ps-edit" data-id="${esc(entry.identifier)}">
-          <div class="ps-edit-row"><label>Name <input class="ps-name-in" data-id="${esc(entry.identifier)}" value="${esc(p.name || "")}"></label>
-          <label>Role <select class="ps-role" data-id="${esc(entry.identifier)}">${["system", "user", "assistant"].map((r) => `<option value="${r}"${(p.role || "system") === r ? " selected" : ""}>${r}</option>`).join("")}</select></label></div>
-          <textarea class="ps-content" data-id="${esc(entry.identifier)}" rows="10" placeholder="Block text — supports ST macros: {{user}}, {{setvar::key::value}}, {{getvar::key}}, {{roll::1d20}}, {{// comments}}…">${esc(p.content || "")}</textarea>
-          <div class="ps-edit-acts"><button type="button" class="mini ok ps-save" data-id="${esc(entry.identifier)}">Save block</button><button type="button" class="mini ps-close">Close</button></div>
-        </div>` : ""}`;
+        ${isOpen && !isMarker ? editBlockHtml(p) : ""}`;
+    }).join("");
+    // Orphan rows: file blocks outside the play order. ＋ appends to the order; edit/delete like
+    // any other block; markers stay engine slots (nothing to add — the engine owns those slots).
+    const orphanRows = orphans.map((p) => {
+      const isMarker = p.marker === true;
+      const isOpen = openId === p.identifier;
+      return `
+        <div class="ps-row ps-row-orphan${isMarker ? " ps-row-slot" : ""}${isOpen ? " ps-open" : ""}" data-id="${esc(p.identifier)}">
+          ${isMarker ? `<span class="ps-en" title="Engine-native slot">—</span>` : `<button type="button" class="mini ps-addorphan" data-id="${esc(p.identifier)}" title="Add to the end of the play order">＋</button>`}
+          <button type="button" class="ps-name" data-id="${esc(p.identifier)}" title="${isMarker ? "Engine-native slot (read-only)" : "View / edit block content"}">${esc(p.name || p.identifier)}</button>
+          ${badgesHtml(p)}
+          <span class="ps-tools">
+            <button type="button" class="mini ps-del" data-id="${esc(p.identifier)}" title="Delete block"${isMarker ? " disabled" : ""}>✕</button>
+          </span>
+        </div>
+        ${isOpen && !isMarker ? editBlockHtml(p) : ""}`;
     }).join("");
 
     sec.innerHTML = `
       <h3 class="pf-sec-title">Prompt Preset</h3>
-      <p class="pf-hint">Optional stack of author instruction blocks that rides into every GM prompt — imported from SillyTavern chat-completion preset <b>.json</b> files (${count ? count + " block" + (count === 1 ? "" : "s") + " playing" : "none playing"}).${presetParsed ? "" : " Import a preset below, or leave it off for the engine's own prompting."}</p>
-      <div class="pf-kv"><span class="pf-k" id="psStatus">${esc(presetParsed ? presetStore.name + (presetStore.on ? " — stack ON" : " — stack OFF") : "No preset imported")}</span></div>
+      <p class="pf-hint">Optional stack of author instruction blocks that rides into every GM prompt — imported from SillyTavern chat-completion preset <b>.json</b> files (${count ? count + " block" + (count === 1 ? "" : "s") + " playing" : "none playing"}). The library is <b>synced with your Loreweaver server</b>, so imported presets follow you across devices.${presetParsed ? "" : " Import a preset below, or leave it off for the engine's own prompting."}</p>
+      <div class="pf-kv pf-ps-librow"><span class="pf-k">Preset</span><select class="popup-in" id="psLibSel"${presetLib.presets.length ? "" : " disabled"}>${libOpts || `<option value="">— none —</option>`}</select><span id="psOnMount"></span></div>
       <div class="ps-head">
-        <button type="button" class="btn" id="psImport" title="Import an ST chat-completion preset .json">⬆ Import .json</button>
-        <button type="button" class="btn" id="psExport" title="Download the current preset as ST-format .json"${presetParsed ? "" : " disabled"}>⬇ Export .json</button>
+        <button type="button" class="btn" id="psImport" title="Import an ST chat-completion preset .json into the library">⬆ Import .json</button>
+        <button type="button" class="btn" id="psExport" title="Download the active preset as ST-format .json"${presetParsed ? "" : " disabled"}>⬇ Export .json</button>
+        <button type="button" class="mini warn" id="psDelPreset" title="Remove the active preset from the library"${presetLib.presets.length ? "" : " disabled"}>🗑 Delete preset</button>
         <button type="button" class="mini" id="psAdd" title="Append a new empty block at the end of the play order"${presetParsed ? "" : " disabled"}>＋ New block</button>
         <input type="file" id="psFile" accept=".json,application/json" hidden>
       </div>
-      ${entries.length ? `<div class="ps-list">${rows}</div>` : (presetParsed ? `<div class="pf-hint">This preset has no play order (prompt_order) — enable blocks by adding them with ＋ or importing a preset that has one.</div>` : "")}`;
+      ${entries.length ? `<div class="ps-list">${rows}</div>` : (presetParsed ? `<div class="pf-hint">This preset has no play order (prompt_order) — enable blocks by adding them with ＋ or importing a preset that has one.</div>` : "")}
+      ${orphanRows ? `<details class="ps-orph"><summary>Not in play order (${orphans.length})</summary><div class="ps-list">${orphanRows}</div></details>` : ""}`;
 
     // wiring ------------------------------------------------------------------
+    // Library row: which preset is active + the On/Off gate for the whole stack.
+    const onMount = sec.querySelector("#psOnMount");
+    if (onMount) {
+      const swOn = switchEl({
+        on: () => presetLib.on,
+        set: (v) => { presetLib.on = v; },
+        text: presetLib.on ? "On" : "Off",
+        plain: true,
+        onChange: () => { savePresetLib(); applyPresetToEngine(); }
+      });
+      onMount.appendChild(swOn.el);
+    }
+    const libSel = sec.querySelector("#psLibSel");
+    if (libSel) libSel.onchange = () => {
+      presetLib.active = libSel.value;
+      openId = null;
+      reparsePreset();
+      savePresetLib();
+      applyPresetToEngine();
+      render();
+    };
+    sec.querySelector("#psDelPreset").onclick = async () => {
+      if (!presetLib.presets.length) return;
+      const ok = await ConfirmPopup.open({ title: "Delete preset", message: `Delete '${presetLib.active || presetLib.presets[0].name}' from the library? This cannot be undone.`, confirmText: "Delete", danger: true });
+      if (!ok) return;
+      const victim = presetLib.active || presetLib.presets[0].name;
+      presetLib.presets = presetLib.presets.filter((p) => p.name !== victim);
+      if (presetLib.active === victim) presetLib.active = presetLib.presets.length ? presetLib.presets[0].name : "";
+      if (!presetLib.presets.length) presetLib.on = false;
+      openId = null;
+      reparsePreset();
+      savePresetLib();
+      applyPresetToEngine();
+      render();
+      notify("🗑 Preset deleted.");
+    };
     sec.querySelector("#psFile").addEventListener("change", (e) => {
       const f = e.target.files && e.target.files[0];
       e.target.value = ""; // allow re-importing the same file after an edit
@@ -3241,9 +3351,16 @@ function presetSection() {
       fr.onload = () => {
         const r = parsePresetJson(String(fr.result || ""));
         if (!r.ok) { notify("✖ Import failed: " + (r.errors[0] || "unknown error")); return; }
-        presetStore = { raw: JSON.stringify(r.preset.data), name: f.name.replace(/\.json$/i, ""), on: true };
+        const name = f.name.replace(/\.json$/i, "");
+        // Import into the library: same name replaces (a deliberate re-import), else appends.
+        const existing = presetLib.presets.find((p) => p.name === name);
+        if (existing) existing.raw = JSON.stringify(r.preset.data);
+        else presetLib.presets.push({ name, raw: JSON.stringify(r.preset.data) });
+        presetLib.active = name;
+        presetLib.on = true;
+        openId = null;
         reparsePreset();
-        savePresetStore();
+        savePresetLib();
         applyPresetToEngine();
         notify("✓ Preset imported — " + presetParsed.order.length + " play-order entries. Stack is ON.");
         render();
@@ -3256,7 +3373,7 @@ function presetSection() {
       const blob = new Blob([serializePresetExport(presetParsed)], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = (presetStore.name || "preset") + ".json";
+      a.download = (presetLib.active || "preset") + ".json";
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -3297,6 +3414,16 @@ function presetSection() {
     };
     sec.querySelectorAll(".ps-up").forEach((b) => { b.onclick = () => move(b.dataset.id, -1); });
     sec.querySelectorAll(".ps-down").forEach((b) => { b.onclick = () => move(b.dataset.id, 1); });
+    sec.querySelectorAll(".ps-addorphan").forEach((b) => {
+      b.onclick = () => {
+        const g = orderGroup();
+        if (!g) return;
+        g.order.push({ identifier: b.dataset.id, enabled: true });
+        commit();
+        render();
+        notify("✓ Block added to the end of the play order.");
+      };
+    });
     sec.querySelectorAll(".ps-del").forEach((b) => {
       b.onclick = async () => {
         const p = promptById(b.dataset.id);
@@ -3632,7 +3759,7 @@ function openSettingsPanel(section = null) {
     // Chrome preferences need no module of their own: the section is main.js's.
     { id: "interface", title: "Interface", load: () => interfaceSection() },
     { id: "aimodel", title: "AI Model", load: () => aiModelSection() },
-    { id: "preset", title: "Prompt Preset", load: () => presetSection() }, // [rpge-patch 022]
+    { id: "preset", title: "Prompt Preset", load: async () => { await loadPresetLib(); return presetSection(); } }, // [rpge-patch 022 followup] — awaits the synced library so the editor never shows a stale/empty list
     { id: "imagegen", title: "Image Gen", load: () => imageGenSection() },
     { id: "backup", title: "Data & Backup", load: (mods) => mods.b.backupSection() },
     // Admin is the one section you cannot simply switch to: `ensure` is the password gate, and the
