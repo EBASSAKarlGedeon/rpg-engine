@@ -29,6 +29,7 @@ import { pushBackClose } from "./back-close.js";
 import { initLightbox } from "./lightbox.js";
 import { initInfoTips, infoTipHtml, infoTipLabelHtml } from "./info-tip.js";
 import { TextPopup, ConfirmPopup } from "./popups.js";
+import { ColorPicker } from "./color-picker.js"; // [rpge-patch 023]
 import { initSceneImages, runSceneCommand, quickSceneImage, imageMsgEl, editImagePrompt, rerollImagesWithConfirm, deleteMessageWithConfirm, renderGalleryBody, allGalleryImages, scenePrefs, persistScenePrefs } from "./scene-images.js";
 import {
   syncHomeHash, isStaleHomeHashEcho, reassertHomeHash,
@@ -3298,6 +3299,7 @@ function presetSection() {
       <div class="pf-kv pf-ps-librow"><span class="pf-k">Preset</span><select class="popup-in" id="psLibSel"${presetLib.presets.length ? "" : " disabled"}>${libOpts || `<option value="">— none —</option>`}</select><span id="psOnMount"></span></div>
       <div class="ps-head">
         <button type="button" class="btn" id="psImport" title="Import an ST chat-completion preset .json into the library">⬆ Import .json</button>
+        <button type="button" class="btn" id="psBundled" title="Import the bundled FF 5.4 — Engine Edition preset: Freaky Frankenstein 5.4 hand-tuned for this engine (internal-states dashboards replaced by engine-native panels, app-side dialogue colors, think-tag reasoning stripped)">⭐ FF 5.4 Engine Edition</button>
         <button type="button" class="btn" id="psExport" title="Download the active preset as ST-format .json"${presetParsed ? "" : " disabled"}>⬇ Export .json</button>
         <button type="button" class="mini warn" id="psDelPreset" title="Remove the active preset from the library"${presetLib.presets.length ? "" : " disabled"}>🗑 Delete preset</button>
         <button type="button" class="mini" id="psAdd" title="Append a new empty block at the end of the play order"${presetParsed ? "" : " disabled"}>＋ New block</button>
@@ -3368,6 +3370,31 @@ function presetSection() {
       fr.readAsText(f);
     });
     sec.querySelector("#psImport").onclick = () => sec.querySelector("#psFile").click();
+    // [rpge-patch 023] The bundled FF 5.4 — Engine Edition: same import pipeline as a file, but
+    // the preset ships with the engine (app/src/game/presets/) and always lands under a fixed
+    // name. Same-name re-import replaces, so a button click both installs and updates it.
+    sec.querySelector("#psBundled").onclick = async () => {
+      try {
+        const res = await fetch("src/game/presets/ff54-engine-edition.json");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const r = parsePresetJson(String(await res.text() || ""));
+        if (!r.ok) { notify("✖ Bundled preset failed to parse: " + (r.errors[0] || "unknown error")); return; }
+        const name = "FF 5.4 — Engine Edition";
+        const existing = presetLib.presets.find((p) => p.name === name);
+        if (existing) existing.raw = JSON.stringify(r.preset.data);
+        else presetLib.presets.push({ name, raw: JSON.stringify(r.preset.data) });
+        presetLib.active = name;
+        presetLib.on = true;
+        openId = null;
+        reparsePreset();
+        savePresetLib();
+        applyPresetToEngine();
+        notify("⭐ FF 5.4 — Engine Edition loaded — " + presetParsed.order.length + " play-order entries. Stack is ON.");
+        render();
+      } catch (e) {
+        notify("✖ Could not load the bundled preset: " + (e && e.message ? e.message : e));
+      }
+    };
     sec.querySelector("#psExport").onclick = () => {
       if (!presetParsed) return;
       const blob = new Blob([serializePresetExport(presetParsed)], { type: "application/json" });
@@ -8165,6 +8192,24 @@ function isHeroSpeaker(name) {
 // match nothing either — they are a different person, not a variant.
 // `unlinked` is the per-line flag (`m.npcUnlinked` from the 🔗 menu): exact-or-nothing, same as a
 // ruled-separate spelling. Without it an unlinked bubble would still wear the profile's avatar.
+// [rpge-patch 023] Dialogue colors — engine-side replacement for ST's Colored Dialogue tags.
+// Each speaker's label + portrait ring wear their color: the player's per-NPC pick (NPC profile
+// → Dialogue color, `npc.color`) when set, otherwise a stable auto hue hashed from the canonical
+// name — the same character always renders the same color, with zero effort from the model (the
+// model never emits color markup; the FF 5.4 Engine Edition preset ships this as an app-side
+// note in place of ST's tag block). Empty string when nothing resolves (hero speakers keep the
+// default accent).
+const NPC_AUTO_COLORS = ["#e2b04a", "#7fb4d8", "#8fc98f", "#d98fc0", "#c98f6a", "#a48fd9", "#d9c26a", "#6ac9b8", "#d97f7f", "#8fa9d9", "#b8d97f", "#d9a17f"];
+function npcColorFor(npc, fallbackName) {
+  const v = npc && typeof npc.color === "string" ? npc.color.trim() : "";
+  if (v) return v;
+  const name = String((npc && npc.name) || fallbackName || "").trim().toLowerCase();
+  if (!name) return "";
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return NPC_AUTO_COLORS[h % NPC_AUTO_COLORS.length];
+}
+
 function npcForSpeaker(name, npcKey, unlinked) {
   const npcs = (state && state.npcs) || {};
   if (!unlinked && npcKey && npcs[npcKey]) return npcs[npcKey];
@@ -8280,6 +8325,14 @@ function duetEl(a, b) {
       `</div>`;
   }
   // Same click targets as a normal npc bubble: portrait/name opens the speaker's panel or profile.
+  // [rpge-patch 023] per-side speaker color first, so each half wears its own hue.
+  w.querySelectorAll(".duet-side").forEach((side, i) => {
+    const md = sideData[i] && sideData[i].m;
+    if (md && !isHeroSpeaker(md.name)) {
+      const col = npcColorFor(npcForSpeaker(md.name, md.npcKey, md.npcUnlinked) || {}, md.name);
+      if (col) side.style.setProperty("--npc-col", col);
+    }
+  });
   w.querySelectorAll(".duet-avatar, .duet-name").forEach((el) => {
     const i = el.closest(".duet-side") ? [...w.querySelectorAll(".duet-side")].indexOf(el.closest(".duet-side")) : 0;
     el.onclick = (e) => openSpeakerFromChat(sideData[i].m, e.currentTarget);
@@ -8349,6 +8402,11 @@ function partEl(m, interactive = false) {
     const title = heroSpeaker ? "Open your Hero panel" : `Open ${esc((npc && npc.name) || m.name)}'s profile`;
     const w = document.createElement("div");
     w.className = "msg npc";
+    // [rpge-patch 023] speaker color — name + portrait ring (hero-voiced lines keep the default)
+    if (!heroSpeaker) {
+      const col = npcColorFor(npc, m.name);
+      if (col) w.style.setProperty("--npc-col", col);
+    }
     w.innerHTML = `<div class="avatar npc-avatar" title="${title}">${avHtml}</div>
       <div class="bubble npc"><div class="name npc-name" title="${title}">${esc(m.name)}${!heroSpeaker ? npcLinkIconHtml(m) : ""}</div><div class="text">${renderText(m.text)}</div></div>`;
     w.querySelector(".npc-avatar").onclick = (e) => openSpeakerFromChat(m, e.currentTarget);
@@ -8363,6 +8421,10 @@ function partEl(m, interactive = false) {
     const title = heroSpeaker ? "Open your Hero panel" : `Open ${esc((linked && linked.name) || m.name)}'s profile`;
     const w = document.createElement("div");
     w.className = "msg thought";
+    if (!heroSpeaker) {
+      const col = npcColorFor(linked, m.name);
+      if (col) w.style.setProperty("--npc-col", col);
+    }
     w.innerHTML = `<div class="thought-ico">💭</div>
       <div class="thought-bubble"><div class="name npc-name" title="${title}">${esc(m.name)}${!heroSpeaker ? npcLinkIconHtml(m) : ""} <span class="dim">(inner)</span></div><div class="text">${renderText(m.text)}</div></div>`;
     w.querySelector(".npc-name").onclick = (e) => openSpeakerFromChat(m, e.currentTarget);
@@ -13018,6 +13080,7 @@ class NpcPopup {
           <span class="p-label">Profile</span>
         </div>
         ${missing ? noProfile : bioLayoutHtml(NPC_FIELDS, (k) => d[k])}
+        <div class="npcpop-colorrow"><span class="p-label">Dialogue color</span><span class="npcpop-colorslot"></span></div>
         <div class="npcpop-actions npcpop-prof-acts">
           <button class="btn npcpop-reprofile${busy ? " is-loading" : ""}"${busy ? " disabled" : ""}>${busy ? '<span class="spin spin-sm"></span> Generating…' : "⟳ Regenerate profile"}</button>
         </div>`;
@@ -13050,6 +13113,26 @@ class NpcPopup {
         </div>
       </div>`;
     const freshScroller = this.overlay.querySelector(".npcpop-body");
+    // [rpge-patch 023] Dialogue color picker — writes `npc.color` live (blank = auto hue),
+    // debounced-save + chat re-render so open chat bubbles pick it up without thrashing.
+    const colorSlot = this.overlay.querySelector(".npcpop-colorslot");
+    if (colorSlot) {
+      let colorSaveT = 0;
+      const picker = new ColorPicker({
+        value: npc.color || "",
+        placeholder: "#rrggbb",
+        title: "Colors this character's name + portrait ring in chat — blank = auto color",
+        onInput: (hex) => {
+          npc.color = hex.trim();
+          clearTimeout(colorSaveT);
+          colorSaveT = setTimeout(() => {
+            store.save(state).catch((e) => { if (typeof isStorageError === "function" && (isStorageError(e) || (e && e.isStorageUnavailable))) { try { notifyStorageError(notify, "saving", e); } catch (_) {} } else console.warn("[session] background save failed:", e); });
+            render();
+          }, 400);
+        },
+      });
+      colorSlot.replaceWith(picker.el);
+    }
     const x = this.overlay.querySelector(".popup-x");
     if (x) x.onclick = () => this.close();
     this.overlay.querySelectorAll(".npc-tabs .seg-btn").forEach((b) => {

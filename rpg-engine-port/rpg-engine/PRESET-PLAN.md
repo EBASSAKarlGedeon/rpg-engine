@@ -75,6 +75,41 @@ Hand-port the prose-style / POV / NSFW / behavior-wording blocks from
 verbatim into a preset file the engine can load. Drops the 8 Internal-States HTML modules (see
 rationale above). Delivers the actual "FF 5.4 without internal-state dashboards" ask.
 
+**SHIPPED** — built from the user's own "Prose-Only" curation (their Internal-States-scrubbed
+derivative of the FULL preset) rather than re-deriving from scratch. Bundled at
+`app/src/game/presets/ff54-engine-edition.json` (59 prompts / 52 in play order / ~10.5k-token ON
+stack), loaded with a `⭐ FF 5.4 Engine Edition` button in the Prompt Preset editor (same import
+pipeline, fixed library name "FF 5.4 — Engine Edition", same-name re-import replaces).
+
+Changes vs the user's Prose-Only file:
+- Dropped entirely (10 blocks): the 9 Internal-States dashboards (DnD Sim, Internal Agenda,
+  GM's Notebook, Inventory/Feats/Titles, Relationships RPG, World Sim, Chekhov's Gun, Internal
+  Thoughts, master toggle) + Twitter X Feed — each has a superior engine-native counterpart.
+- Kept OFF as options: MAX / Micro / BOLT CoT family (BOLT ON), Kimi K3, Auto Image Gen SDXL
+  (rewritten to an app-side no-op comment — the engine's Image Bridge replaces it), Debug Engine.
+- Renamed + rewritten: "🧩 Character Cells — injected scene state" → "🧩 Scene State — injected
+  by the app" (Character Cells was the user's discontinued extension; the text now describes
+  the engine's native injected scene state, authoritative + never re-output).
+- Rewritten to app-side no-ops: both 🌈 Colored Dialogue blocks — coloring happens in the
+  engine, the model never writes `<color:…>` tags.
+- Flipped ON: 👾 Pop in Graphics (the engine renders `<!-- GFX_START -->` natively, patch 020).
+
+Two engine additions it required:
+- `stripThinkBlocks()` (rp-engine.js): CoT leak guard — closed
+  think/thinking/thought/reasoning tag pairs cut, an unclosed opener cuts the tail; wired into
+  both GM-reply and death-scene parse paths BEFORE the tracker-echo strippers. Reasoning may
+  flash in the live stream (raw accumulator) but never reaches the transcript or history.
+- Per-NPC dialogue colors (main.js + npc-system.js + styles.css): `npc.color` on the session
+  roster entry (inherited from world-cast `color` at creation), ColorPicker in the NPC profile
+  popup ("Dialogue color", debounced save + chat re-render), stable auto hue from a curated
+  12-color palette hashed on the canonical name when unset. Applied to the NPC name label +
+  2px portrait ring on npc/thought/duet bubbles via `--npc-col`. The model emits no markup.
+
+Verified: `tools/check-presets.js` 106/106 (bundled file: parse clean, dropped blocks absent,
+ON/OFF flags, Colored Dialogue expands to nothing, no dashboards/color tags in the expanded
+stack; think-strip unit tests). `check-regex.js` 40/40, `check-preset-ui.js` green, `node
+--check` clean on all touched files.
+
 ## [rpge-patch 020] — full spec
 
 ### Markup shape (author/AI-facing)

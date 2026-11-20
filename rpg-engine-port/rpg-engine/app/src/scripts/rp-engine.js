@@ -15,6 +15,28 @@ import { assemblePresetPrompt } from "./presets.js"; // [rpge-patch 022]
 import { NPC_LIFE_MIN_OFFSCREEN_TURNS } from "./npc-life.js";
 import { PERCHANCE_INPUT_CAP, PERCHANCE_CHARS_PER_TOKEN } from "./perchance-limits.js";
 
+// [rpge-patch 023] Think-tag stripping for CoT presets. The FF 5.4 Engine Edition ships the
+// BOLT chain-of-thought block, which makes the model reason inside think tags (MAX/Micro too,
+// when the user enables them). The reasoning must NEVER reach the story: closed
+// think/thinking/thought/reasoning tag PAIRS are cut (with their surrounding blank lines); an
+// unclosed opener (a truncated stream that ended mid-reasoning) cuts everything from the LAST
+// opener to the end — that tail is all reasoning by definition. Runs on the GM reply +
+// death-scene text before the tracker/echo strippers. The LIVE STREAM may still show the
+// reasoning briefly (the accumulator streams raw); the parsed + rendered transcript is always
+// clean.
+export function stripThinkBlocks(text) {
+  let t = String(text || "");
+  t = t.replace(/\s*<(?:think|thinking|thought|reasoning)\b[^>]*>[\s\S]*?<\/(?:think|thinking|thought|reasoning)>\s*/gi, "\n\n");
+  const openers = [/<(?:think[a-z]*|thought[a-z]*|reasoning[a-z]*)/i];
+  let cut = -1;
+  for (const re of openers) {
+    const m = t.match(re);
+    if (m && m.index > cut) cut = m.index;
+  }
+  if (cut >= 0) t = t.slice(0, cut);
+  return t.trim();
+}
+
 // Diff two tracker snapshots into "already applied" lines ("key: a → b"). Pseudo-entries
 // (`key.max`, current caps) are included when they changed. `a` may be null/undefined when
 // there is no earlier snapshot.
@@ -1629,7 +1651,7 @@ export class RPEngine {
     // be extracted FIRST: its per-character `Name:`
     // headers also match the hero block's `key:` line shape, so the hero extractor would swallow
     // them (see README §6.3.1).
-    const deLeaked = stripTrackerLeak(raw);
+    const deLeaked = stripTrackerLeak(stripThinkBlocks(raw));
     const { text: noNpcBlock } = extractNpcTrackers(deLeaked);
     // [rpge-patch 019] Ability-gain strips come out BEFORE the tracker extractor so an
     // `[ACTION: …]` line can never be mistaken for a `key:` tracker value.
@@ -1745,7 +1767,7 @@ export class RPEngine {
       return [];
     }
     const raw = (acc && acc.trim()) || String((result && result.text) || result || "").trim() || "";
-    const { text } = extractTrackers(stripTrackerLeak(raw));
+    const { text } = extractTrackers(stripTrackerLeak(stripThinkBlocks(raw)));
     return this.parseGmOutput(text);
   }
 

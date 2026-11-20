@@ -222,6 +222,10 @@ export class NpcSystem {
     return {
       name,
       portrait: cast ? (cast.avatar || "src/images/portrait-placeholder.webp") : "src/images/portrait-placeholder.webp",
+      // [rpge-patch 023] dialogue color — inherited from an authored world-cast color when one
+      // is set (the session profile editor can still override it); generated NPCs start blank
+      // (auto hue).
+      color: cast && typeof cast.color === "string" ? cast.color.trim() : "",
       description: description || "",
       details,
       trackers: this._seedTrackers(cast, state, { name, details }),

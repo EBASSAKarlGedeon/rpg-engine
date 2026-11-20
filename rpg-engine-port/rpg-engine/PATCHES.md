@@ -836,3 +836,88 @@ premise, injections before the reply directive, garbage-preset degradation).
 profiles already own that job), `injection_depth` positional slicing inside the transcript
 (only relevant if a preset ships non-zero depths; the target preset doesn't), and the FF 5.4
 "Engine Edition" preset DATA itself — that's patch 023.
+
+### [rpge-patch 022] followup — syncable preset library + AI Model response tuning (2026-11-22)
+User decisions (2026-11-22): the preset applies to GM narration only (confirmed correct — tracker
+extraction stays deliberately narrow); close the orphan-visibility gap; add preset delete +
+switching; samplers are NOT imported from preset files but become explicit settings in AI Model.
+
+**Syncable preset library**: storage moved from a device-local localStorage blob to the kv
+session folder — `kv.rpg["promptPresets"]` = `{ presets: [{ name, raw }], active, on }`. The
+`rpg` folder is in the server-save mirror's `MIRROR_FOLDERS`, so the library rides the same
+offline-capable server sync as sessions/worlds (IndexedDB locally, reconciled to
+`data/<user>/rpg-engine/kv/rpg/promptPresets.json` — the hub sync carries it between devices).
+The editor gains a library row (preset select + On/Off gate), 🗑 Delete preset (confirm; clears
+back to engine-native), and switching = pick another entry (live flip on a running engine).
+One-time migration from the pre-library localStorage blob. Missing kv shim (bare standalone)
+falls back to localStorage.
+
+**Orphan visibility**: blocks present in the file but outside the play order (ST's "out of
+order" clones) now render in a collapsed **"Not in play order (N)"** group with ＋ add-to-order
+(edit/delete like any other block; markers stay engine slots — nothing to add).
+
+**AI Model → Response tuning (optional foldbox)**: Temperature, Top P, Top K, Frequency penalty,
+Presence penalty (blank = the connection profile or its preset sampling decides — exactly
+today's behavior; a number always wins because the bridge shim only fills fields the payload
+leaves unset), **Max reply tokens** (GM narration call ONLY — bookkeeping calls keep their
+engine caps so machine-output shapes stay intact), **Streaming** on/off (off sends
+`stream:false`; the reply parser already handles both content types). Persisted in the engine
+config (`mno.aiProvider`), carried through `readStore`/`setResponseTuning`.
+
+**Bug found & fixed by verification** (`app/shims/tweaks.js`): the cosmetic shim's
+default-section redirect clicked the "AI Model" nav button ~70 ms after ANY Settings open —
+stealing the requested section (Prompt Preset opened, then flipped to AI Model). Now it only
+redirects when NO section was requested (the default landing on the hidden Identity), by
+checking the already-active `.pf-md-btn.on`. Pre-existing bug — everyone who opened a specific
+section via deep links was affected; nobody noticed because manual clicks came after.
+
+**Verified**: `tools/check-preset-ui.js` — full UI harness green (kv-stubbed, isolated context,
+zero real-server writes): section opens, import→library blob {presets, active, on}, play-order
+rows, orphan foldout + add-to-order (blob order updated), block edit persisted, Off switch
+persisted, delete clears to engine-native, and the Response-tuning foldbox (5 sampler inputs +
+max-reply + streaming; temperature 0.7 persisted, blanks stay blank). Screenshots ps01–ps03 in
+Temp/rpge-heavy/. `check-presets.js` 80/80 and `check-regex.js` 40/40 stay green.
+
+---
+
+## [rpge-patch 023] — FF 5.4 — Engine Edition (bundled preset + dialogue colors + CoT leak guard)
+
+**Goal**: the "Freaky Frankenstein 5.4" preset — the user's signature SillyTavern stack —
+running inside the engine with its internal-state dashboards replaced by engine-native panels.
+Built from the user's own **Prose-Only** curation (their scrubbed derivative of the FULL
+preset), verbatim, with engine-specific adjustments.
+
+**Bundled preset** (`app/src/game/presets/ff54-engine-edition.json`, 59 prompts / 52 in play
+order / ~10.5k-token ON stack) + a **⭐ FF 5.4 Engine Edition** button in Settings → Prompt
+Preset (same import pipeline, fixed library name, same-name re-import replaces → it installs
+AND updates). Presets sync across devices with the library (kv `rpg` mirror, patch 022).
+
+Recipe vs Prose-Only: the 9 Internal-States dashboards + Twitter X Feed dropped entirely (each
+has a superior engine-native counterpart); MAX/Micro CoT kept OFF, BOLT CoT kept ON; "Character
+Cells" (the user's discontinued extension) renamed + rewritten as "🧩 Scene State — injected by
+the app" describing the engine's native scene-state feed; both Colored Dialogue blocks became
+comment-only no-ops (coloring is app-side); Auto Image Gen SDXL became an app-side no-op (the
+Image Bridge replaces it); **Pop in Graphics flipped ON** (the engine renders GFX natively).
+
+**Engine addition 1 — `stripThinkBlocks()`** (`rp-engine.js`, wired into the GM-reply and
+death-scene parse paths before the tracker-echo strippers): closed
+think/thinking/thought/reasoning pairs are cut with their blank lines; an unclosed opener (a
+truncated stream that ended mid-reasoning) cuts everything from the last opener to the end.
+Reasoning can flash briefly in the live stream (the accumulator is raw) but never lands in the
+transcript, history, or memory.
+
+**Engine addition 2 — per-NPC dialogue colors** (replaces ST's Colored Dialogue tags): the
+model writes plain quoted dialogue; the engine colors each character. `npc.color` on the
+session roster entry (inherited from an authored world-cast color when set), a **Dialogue
+color** ColorPicker in the NPC profile popup (debounced save + chat re-render), and a stable
+auto hue — hash of the canonical name into a curated 12-color palette — when unset. Rendered as
+the speaker's name label + a 2px portrait ring on npc/thought/duet bubbles via `--npc-col`
+(unset bubbles keep the default accent). Full-sentence color was rejected: name + ring reads
+clean and never hurts legibility.
+
+**Verified**: `tools/check-presets.js` **106/106** — new sections: the bundled file (parse
+clean, dropped blocks absent, Scene State renamed, MAX/Micro present + OFF, BOLT ON, Pop-in ON,
+Light Novel ON, both Colored Dialogue blocks expand to nothing, expanded stack free of
+`<internal_dndsim>` dashboards / color tags / raw macros) and `stripThinkBlocks` unit tests
+(closed pair, thinking variant, unclosed tail cut, reasoning-only, echo-content preserved).
+`check-regex.js` 40/40, `check-preset-ui.js` green, `node --check` clean on all touched files.

@@ -5,7 +5,7 @@
 // stable cluster and ABSOLUTE injections right before the final reply directive).
 // Run: node tools/check-presets.js
 import { parsePresetJson, expandMacros, assemblePresetPrompt, serializePresetExport, rollFormula } from "../app/src/scripts/presets.js";
-import { RPEngine } from "../app/src/scripts/rp-engine.js";
+import { RPEngine, stripThinkBlocks } from "../app/src/scripts/rp-engine.js";
 import { readFileSync } from "node:fs";
 
 let n = 0;
@@ -194,6 +194,60 @@ console.log("== RPEngine seam (real buildContext) ==");
     eq(out.inFlow, "", "garbage preset degrades to no stack");
     eq(out.injections.length, 0, "garbage preset degrades to no injections");
   }
+}
+
+console.log("");
+console.log("== bundled FF 5.4 — Engine Edition (app/src/game/presets/) ==");
+{
+  const raw = readFileSync(new URL("../app/src/game/presets/ff54-engine-edition.json", import.meta.url), "utf8");
+  const r = parsePresetJson(raw);
+  ok(r.ok, "bundled file parses clean" + (r.ok ? "" : " (" + (r.errors || []).join("; ") + ")"));
+  const data = r.preset.data;
+  const byId = new Map((data.prompts || []).map((p) => [p.identifier, p]));
+  const order = (data.prompt_order || []).find((g) => g && g.character_id === 100001) || (data.prompt_order || [])[0];
+  ok(!!order, "global play-order group present");
+  const on = (order.order || []).filter((e) => e.enabled !== false);
+  const nameOf = (e) => ((byId.get(e.identifier) || {}).name || "");
+  const names = on.map(nameOf);
+  const stateOf = (re) => { const e = (order.order || []).find((e) => re.test(nameOf(e))); return e ? e.enabled !== false : null; };
+  ok(on.length >= 28, "healthy play order (" + on.length + " on)");
+  ok(names.some((nm) => /Scene State/.test(nm)), "Scene State block present (renamed from Character Cells)");
+  ok(!names.some((nm) => /Character Cells/.test(nm)), "no block still named Character Cells");
+  ok(!names.some((nm) => /DnD Simulator|Internal Agenda|GM's Notebook|Inventory, Feats|Relationships RPG|World Sim|Chekhov|Internal Thoughts|Internal States|Twitter/.test(nm)), "internal-states dashboards + Twitter dropped");
+  const allNames = (order.order || []).map(nameOf);
+  ok(allNames.some((nm) => /MAX Chain/.test(nm)) && allNames.some((nm) => /Micro Chain/.test(nm)), "MAX/Micro CoT kept as options");
+  eq(stateOf(/MAX Chain/), false, "MAX CoT ships OFF");
+  eq(stateOf(/Micro Chain/), false, "Micro CoT ships OFF");
+  eq(stateOf(/BOLT Chain/), true, "BOLT CoT ships ON");
+  eq(stateOf(/Pop in Graphics/), true, "Pop in Graphics ships ON (engine renders GFX natively)");
+  eq(stateOf(/Light Novel Style/), true, "Light Novel Style ships ON (the author's pick)");
+  ok(stateOf(/Auto Image Gen/) !== true, "Auto Image Gen not enabled (app-side image gen)");
+  // Colored Dialogue blocks are comment-only no-ops now — they expand to nothing, so the
+  // assembler skips them and the model is never asked to write color tags.
+  const cd = (data.prompts || []).filter((p) => /Colored Dialogue/.test(p.name || ""));
+  eq(cd.length, 2, "both Colored Dialogue blocks kept");
+  for (const p of cd) {
+    const exp = expandMacros(p.content || "", { user: "Wren", char: "GM", vars: new Map() });
+    eq(exp.trim(), "", "Colored Dialogue expands to nothing (coloring is app-side): " + (p.name || "").trim());
+  }
+  const out = assemblePresetPrompt(r.preset, "Wren");
+  ok(!out.inFlow.includes("<internal_dndsim>"), "no internal_dndsim dashboard in the expanded stack");
+  ok(!out.inFlow.includes("<color:"), "no color tags in the expanded stack");
+  ok(!out.inFlow.includes("{{user}}") && !out.inFlow.includes("{{getvar"), "no raw macros left in the expanded stack");
+  ok(out.inFlow.length > 30000, "ON stack is substantial (" + out.inFlow.length + " chars)");
+}
+
+console.log("");
+console.log("== stripThinkBlocks (CoT leak guard) ==");
+{
+  eq(stripThinkBlocks("plain prose, no tags"), "plain prose, no tags", "no tags = unchanged");
+  const OPEN = "<" + "think>", SHUT = "</" + "think>", T1 = "<" + "thinking>", T2 = "</" + "thinking>";
+  eq(stripThinkBlocks("A\n\n" + OPEN + "secret reasoning\nmore" + SHUT + "\n\nB"), "A\n\nB", "closed think pair cut with its blank lines");
+  eq(stripThinkBlocks("A " + T1 + "x" + T2 + " B"), "A\n\nB", "thinking variant also stripped (surrounding whitespace eaten)");
+  eq(stripThinkBlocks("A\n" + OPEN + "never closed"), "A", "unclosed opener cuts everything after it");
+  eq(stripThinkBlocks(OPEN + "reasoning only" + SHUT), "", "reasoning-only output = empty");
+  const out2 = stripThinkBlocks("A\n\n" + OPEN + "r" + SHUT + "\n\nTRACKED STATE\ngrit: 8\n");
+  ok(out2.startsWith("A\n\nTRACKED STATE"), "think strip leaves later content (echo stripper runs after)");
 }
 
 console.log("");
