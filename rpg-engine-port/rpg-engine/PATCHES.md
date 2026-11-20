@@ -968,3 +968,18 @@ tools/check-sdfollow.js **16/16** live harness (mocked endpoints, zero spend): f
 body shapes + aspect mapping, plain path when off, UI toggle/rows/persistence, all three Test
 outcomes. **Live end-to-end**: one real render through the user's local ComfyUI (75 s, PNG)
 matching the prompt exactly. Screenshots sdf01/sdf02 + sdf03-live-follow-render.png.
+
+### [rpge-patch 024] wave 2 — every source mirrored
+`buildSourceRequest` now ports the extension client's payload builder for ALL sources (extras,
+horde, auto/vlad, drawthings, sdcpp, novel incl. the Anlas guard, openai incl. dalle-3/gpt-image
+size rules, aimlapi, comfyrunpod, togetherai, pollinations, stability, huggingface, chutes,
+electronhub incl. the /sizes probe, nanogpt, bfl, falai, xai, google incl. vertexai fields from
+oai_settings, zai incl. the per-model size multiples, openrouter, workersai) and dispatches them
+internally through the SAME upstream server routers the extension uses (minimal req/res shim,
+real `request.user` for secrets). Response mappers are the extension client's exact mappings.
+Video-capable models (sora-2, veo-*, CogVideoX, Vidu) are refused with a clear message — the
+engine renders images only. Engine Test button now shows "Following — source: X" for cloud
+sources (no free reachability probe exists for them). Server tests 41/41 (per-source builders,
+response-mapper parity, internal dispatch, video guards, NovelAI guard, closestAspectRatio/
+closestSize); check-sdfollow 16/16. Live re-check after deploy: endpoint correctly reports the
+unreachable state + --listen hint when ComfyUI is not running (user had closed it).
