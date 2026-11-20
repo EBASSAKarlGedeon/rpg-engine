@@ -11438,9 +11438,12 @@ function actionsTabHtml(c) {
 }
 
 function wireActionsTab(body, c) {
+  // Re-renders must target the PANEL ROOT, not this tab body — rendering the whole panel into
+  // the actions body would nest a fresh copy inside it on every toggle/edit.
+  const rr = () => rerenderHeroPanelIfOpen();
   const acts = () => (Array.isArray(c.actions) ? c.actions : (c.actions = []));
   const add = body.querySelector(".act-add");
-  if (add) add.onclick = () => { actionEditing = "new"; renderCharacterPanel(body); };
+  if (add) add.onclick = () => { actionEditing = "new"; rr(); };
   body.querySelectorAll(".act-toggle").forEach((b) => (b.onclick = () => {
     const id = b.closest(".act-card").dataset.id;
     const a = acts().find((x) => x.id === id);
@@ -11448,9 +11451,9 @@ function wireActionsTab(body, c) {
     a.active = !a.active;
     saveCharacterQuiet();
     notify(a.active ? `${a.icon} ${a.name} is now ON — its stat change applies` : `${a.icon} ${a.name} switched off`);
-    renderCharacterPanel(body);
+    rr();
   }));
-  body.querySelectorAll(".act-edit").forEach((b) => (b.onclick = () => { actionEditing = b.closest(".act-card").dataset.id; renderCharacterPanel(body); }));
+  body.querySelectorAll(".act-edit").forEach((b) => (b.onclick = () => { actionEditing = b.closest(".act-card").dataset.id; rr(); }));
   body.querySelectorAll(".act-del").forEach((b) => (b.onclick = async () => {
     const id = b.closest(".act-card").dataset.id;
     const a = acts().find((x) => x.id === id);
@@ -11461,7 +11464,7 @@ function wireActionsTab(body, c) {
     if (actionEditing === id) actionEditing = null;
     saveCharacterQuiet();
     notify(`${a.icon} ${a.name} removed`);
-    renderCharacterPanel(body);
+    rr();
   }));
   const ed = body.querySelector(".act-editor");
   if (ed) {
@@ -11470,7 +11473,7 @@ function wireActionsTab(body, c) {
       b.classList.add("on");
     }));
     const cancel = ed.querySelector("#actCancel");
-    if (cancel) cancel.onclick = () => { actionEditing = null; renderCharacterPanel(body); };
+    if (cancel) cancel.onclick = () => { actionEditing = null; rr(); };
     const save = ed.querySelector("#actSave");
     if (save) save.onclick = () => {
       const kind = ed.querySelector(".act-kindpick .seg-btn.on").dataset.kind;
@@ -11497,7 +11500,7 @@ function wireActionsTab(body, c) {
       actionEditing = null;
       saveCharacterQuiet();
       notify(`${card.icon} ${card.name} saved${card.kind === "active" ? " (switch it on with ▶ when you invoke it)" : ""}`);
-      renderCharacterPanel(body);
+      rr();
     };
   }
 }

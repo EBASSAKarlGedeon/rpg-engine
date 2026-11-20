@@ -79,7 +79,7 @@ const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems
   }));
   ok(tabState.activeTab === "Actions", "Actions tab is active");
   ok(tabState.cards.some((t) => t.includes("All Enhancement")) && tabState.cards.some((t) => t.includes("Iron Stomach")), "both action cards listed");
-  ok(tabState.statsShown.some((t) => t.includes("→ 38") && t.includes("+30")), "grit row shows base 8 → 38 (buff breaks the world max) with +30 badge");
+  ok(tabState.statsShown.some((t) => t.includes("→ 39") && t.includes("+31")), "grit row shows 8 → 39 (both actions stack, buff breaks the world max), badge +31");
   await page.screenshot({ path: SHOT + "a02-stats-buffed.png", clip: { x: 680, y: 0, width: 320, height: 700 } });
   // toggle the seeded active? none active — add a new ACTIVE action via the editor.
   await page.evaluate(() => { document.querySelector(".act-add").click(); });
@@ -100,7 +100,8 @@ const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems
   await page.evaluate(() => { document.querySelector(".act-card .act-toggle").click(); });
   await page.waitForTimeout(900);
   const witRow = await page.evaluate(() => [...document.querySelectorAll(".statrow")].map((r) => r.textContent.replace(/\s+/g, " ")).find((t) => t.includes("Wit")));
-  ok(/→ 11/.test(witRow || ""), "wit shows 9 → 11 while Blink Step is on");
+  console.log("WITROW:", witRow);
+ok(/→ 11/.test(witRow || ""), "wit shows 9 → 11 while Blink Step is on");
   // switch to Stats tab to confirm the tab strip still alternates cleanly
   await page.evaluate(() => { const b = document.querySelector('.hero-tabs .seg-btn[data-htab="stats"]'); if (b) b.click(); });
   await page.waitForTimeout(700);
