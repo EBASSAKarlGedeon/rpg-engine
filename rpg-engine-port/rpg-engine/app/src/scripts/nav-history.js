@@ -57,7 +57,16 @@ export function reassertHomeHash() {
 export function postHostHash() {
   try {
     if (window.parent && window.parent !== window) {
-      window.parent.postMessage({ type: "changeUrl", search: window.location.search, hash: window.location.hash }, "https://perchance.org");
+      // Address the actual embedding host. This used to hardcode "https://perchance.org"
+      // (pre-Loreweaver leftover): under Loreweaver the parent is the app origin, so the
+      // browser refused delivery (console warning, host bar never followed).
+      // ancestorOrigins is nearest-last in document tree order; referrer covers engines
+      // without it.
+      const target = (location.ancestorOrigins && location.ancestorOrigins.length)
+        ? location.ancestorOrigins[location.ancestorOrigins.length - 1]
+        : (document.referrer ? new URL(document.referrer).origin : "");
+      if (!target) return;
+      window.parent.postMessage({ type: "changeUrl", search: window.location.search, hash: window.location.hash }, target);
     }
   } catch (e) {}
 }
