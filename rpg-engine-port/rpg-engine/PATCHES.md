@@ -921,3 +921,50 @@ Light Novel ON, both Colored Dialogue blocks expand to nothing, expanded stack f
 `<internal_dndsim>` dashboards / color tags / raw macros) and `stripThinkBlocks` unit tests
 (closed pair, thinking variant, unclosed tail cut, reasoning-only, echo-content preserved).
 `check-regex.js` 40/40, `check-preset-ui.js` green, `node --check` clean on all touched files.
+
+---
+
+## [rpge-patch 024] SD-follow — the engine follows Loreweaver's Image Generation settings (wave 1: ComfyUI)
+
+**Goal** (user contract): "whatever endpoint I configure in Loreweaver's Image Generation
+extension — if it works in chat, it works in the RPG engine." One set of image settings for
+chat and game, on every device.
+
+**Design**: instead of mirroring the chat extension's ~25 per-source payload builders into the
+engine (upstream code, drifts on every pull), the mirror lives SERVER-side, next to the settings
+it mirrors:
+
+- NEW src/endpoints/sd-follow.js (Loreweaver-owned, mounted at /api/sd-follow):
+  - /generate — reads the user's saved extension_settings.sd from settings.json, requires
+    source = ComfyUI (wave 1; other sources get a clear "not mirrored yet" message), reads the
+    workflow file from comfyWorkflows/, performs the chat extension's exact placeholder
+    substitution (prompt / negative_prompt / seed / denoise / clip_skip / model / vae /
+    sampler / scheduler / steps / scale / width / height + custom comfy_placeholders, all
+    quote-wrapped so the workflow stays valid JSON), then runs the upstream comfy
+    enqueue-poll-fetch port (incl. the client-close /interrupt).
+  - /status — free probe for the Test button: what the mirror sees + ComfyUI reachability.
+- Aspect to dims: base comes from the extension's own width/height; the engine's aspect only
+  re-orients them (portrait = short side across) so the user keeps pixel control.
+- user_avatar / char_avatar placeholders fall back to the 1x1 pixel, same as the extension's
+  error path (no chat-character context in the engine; hero-portrait pass-through is wave 2).
+
+**Engine side**: Settings > Image Gen > Loreweaver (server) gains a **Follow Image Gen** toggle
+(persisted in mno.imageProvider.follow). On: generation calls POST /api/sd-follow/generate
+{prompt, negative_prompt, aspect} — prompt in, image out; the Model row hides with a hint.
+Off: the previous fixed /api/openrouter/image/generate path (unchanged). Test button switches
+to the /status probe with three outcomes: following+reachable, wrong-source warning,
+unreachable-with-listen hint. The bridge shim now passes the server's error TEXT through
+(all endpoints benefit).
+
+**Pre-existing bug found by the harness** (image-provider.js paint()): main.js spreads the
+builder box's children into the section after mount, so the closure's `box` is an empty shell —
+every post-mount paint() scoped to `box` was a silent no-op (row state could only ever be set at
+build time). paint() now scopes its row queries to `remoteBox`, a direct element reference that
+survives the move.
+
+**Verified**: tests/sd-follow.test.js 13/13 (aspect mapping, substitution fidelity incl.
+quote-wrapping and custom placeholders, mock-ComfyUI enqueue-poll-fetch, unreachable hint);
+tools/check-sdfollow.js **16/16** live harness (mocked endpoints, zero spend): follow routing +
+body shapes + aspect mapping, plain path when off, UI toggle/rows/persistence, all three Test
+outcomes. **Live end-to-end**: one real render through the user's local ComfyUI (75 s, PNG)
+matching the prompt exactly. Screenshots sdf01/sdf02 + sdf03-live-follow-render.png.
