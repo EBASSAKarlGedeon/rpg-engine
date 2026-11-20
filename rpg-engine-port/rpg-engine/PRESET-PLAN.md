@@ -18,10 +18,48 @@
 ### [rpge-patch 020] — GFX panels + inline images in message text
 Small, visual, self-contained — no dependency on the preset system. This patch.
 
-### [rpge-patch 021] — Regex engine port
-Lift `public/scripts/extensions/regex/engine.js` `runRegexScript` as `app/src/scripts/regex.js`.
-Prerequisite for safely ingesting *any* external preset (defensive line for whatever state blocks
-an unvetted preset's text might carry). Standalone testable on its own.
+### [rpge-patch 021] — Regex engine port (full spec)
+**New module**: `app/src/scripts/regex.js` — self-contained port of Loreweaver's
+`public/scripts/extensions/regex/engine.js`. No imports from Loreweaver's `script.js` /
+`extensions.js` / `preset-manager.js` (those reach into ST globals the engine doesn't have);
+instead scripts are passed in explicitly by the caller, and macro expansion uses the engine's own
+`{{user}}` convention (`subUser` from `text-utils.js`) rather than ST's full `substituteParams`
+macro universe.
+
+**Ported pieces (behavior-faithful to ST)**:
+1. `RegexProvider` — LRU-cached `RegExp` compiler (cache size 1000, `lastIndex` reset for
+   global/sticky regexes). Pure JS, ported verbatim.
+2. `regexFromString(input)` — parse `/pattern/flags` → `RegExp`, same flag-validation fallback
+   as `public/scripts/utils.js` (invalid flags → `RegExp(input)`).
+3. `sanitizeRegexMacro(x)` — regex-escape macro-expanded text (for `substituteRegex: ESCAPED`
+   mode), ported verbatim.
+4. `substitute_find_regex` enum — `NONE:0, RAW:1, ESCAPED:2`, verbatim (RAW = macro-expand
+   `findRegex` as-is; ESCAPED = macro-expand then regex-escape the result; NONE = literal).
+5. `runRegexScript(regexScript, rawString, { macros })` — core find/replace engine:
+   `{{match}}` → `$0`, `$1..$9` / `$<namedGroup>` capture-group refs in `replaceString`,
+   `trimStrings` post-match filtering, final macro expansion of the replacement. Ported
+   faithfully; macro expansion swapped for the engine's `{{user}}`-only convention
+   (`expandMacros` helper built on `subUser`).
+6. `filterString` — applies `trimStrings` (each entry macro-expanded, then literal `.replaceAll`
+   removal), verbatim.
+7. `regex_placement` enum — `MD_DISPLAY:0, USER_INPUT:1, AI_OUTPUT:2, SLASH_COMMAND:3,
+   WORLD_INFO:5, REASONING:6`, verbatim.
+8. `getRegexedString(rawString, placement, { scripts, isMarkdown, isPrompt, isEdit, depth })` —
+   the "which scripts run where" gate: `placement.includes()`, `markdownOnly`/`promptOnly`
+   mutual-exclusion, `runOnEdit` gating, `minDepth`/`maxDepth` window — all faithful — but takes
+   an explicit `scripts` array parameter instead of ST's `extension_settings.regex`/
+   character-scoped/preset-scoped storage lookups.
+
+**Not ported (deliberate)**: `getRegexScripts`/`getScriptsByType`/`saveScriptsByType` (ST's
+storage layer) — the engine manages its own script storage in a later patch (likely world-level
+regex rules). For now callers pass `scripts` in explicitly; keeps the module pure/testable and
+the storage decision deferred.
+
+**Test plan** (`tools/check-regex.js`): headless Node unit-style checks (this module is pure JS,
+no DOM dependency — unlike `rich-text.js`): capture groups (`$1`/`$<name>`), `{{match}}`
+shorthand, `trimStrings`, `{{user}}` macro expansion, `substituteRegex: ESCAPED` mode escapes
+regex metacharacters, `regex_placement` gating, `minDepth`/`maxDepth` gating,
+`runOnEdit`/`markdownOnly`/`promptOnly` gating, LRU cache reuse. No new DOM harness needed.
 
 ### [rpge-patch 022] — Engine-native prompt-stack model + editor
 New `app/src/scripts/presets.js` (or similar): schema-compatible model of ST's `prompts` +
