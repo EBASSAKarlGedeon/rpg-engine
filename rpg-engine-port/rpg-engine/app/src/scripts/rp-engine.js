@@ -3,6 +3,7 @@
 import { characterSheet } from "./character.js";
 import { buildNpcTrackerContext, buildNpcTrackerRulesContext, extractNpcTrackers, extractTrackers, foldNpcTrackers, getCurrentNpcTrackers, getCurrentTrackers, initialNpcTrackers, lifeTracker, levelTracker, expTracker, liveMax, locationValue, npcTrackerValuesLine, npcEnabledKeysFromFlags, stripDisabledNpcTrackerKeys, NPC_TRACKER_CAP, LIFE_TRACKER_LOOKBACK_TURNS, LIFE_TRACKER_OFFSCREEN_CAP, LIFE_TRACKER_EVENTS_PER_NPC, parseNpcTrackerBlock, parseTrackerBlock, buildTrackerContext, buildTrackerValuesContext, heroTrackerOutputCap, npcTrackerOutputCap, applyLevelUpBackstop, applyTrackerModes, findTrackerLeakStart, stripTrackerLeak, TRACKER_LEAK_STOPS } from "./trackers.js";
 import { buildStatsContext } from "./stats.js";
+import { effectiveStats, actionsContext, ACTION_GAIN_RULE, parseActionStrips } from "./actions.js";
 import { formatDistance, compassDir, normalizeLoc, mapScale } from "./map-system.js";
 import { loreForTurn, LORE_FEED_CAP, LORE_FEED_MAX_CHARS, DEFAULT_TRIGGER_WINDOW_TURNS, STOPWORDS, nameHit } from "./lorebook.js";
 import { memoriesForTurn, MEMORY_FEED_CAP, MEMORY_TOPICAL_ACTIVE_CAP, MEMORY_TOPICAL_OPEN_CAP, MEMORY_NAME_FEED_CAP, MEMORY_TRIGGER_WINDOW_TURNS, ownerLabel } from "./memory-system.js";
@@ -780,6 +781,11 @@ export class RPEngine {
     }
 
     parts.push("CHARACTER SHEET (player character/the hero):\n" + characterSheet(state.character, this.statDefs));
+
+    // [rpge-patch 019] Declared actions (abilities): the sheet already lists them; the gain rule
+    // tells the GM HOW to award new ones mid-story (machine strip, extracted before render).
+    // Always on for worlds with stats — the hero can gain a first ability at any time.
+    if (this.statDefs.length) parts.push(ACTION_GAIN_RULE);
 
     // Tracked state/resources ride directly under the sheet — hero cluster: who the hero is
     // above, their live values here. The GM reads the current values + what they mean
@@ -1593,8 +1599,16 @@ export class RPEngine {
     // them (see README §6.3.1).
     const deLeaked = stripTrackerLeak(raw);
     const { text: noNpcBlock } = extractNpcTrackers(deLeaked);
-    const { text } = extractTrackers(noNpcBlock);
+    // [rpge-patch 019] Ability-gain strips come out BEFORE the tracker extractor so an
+    // `[ACTION: …]` line can never be mistaken for a `key:` tracker value.
+    const strippedActions = parseActionStrips(noNpcBlock);
+    const { text } = extractTrackers(strippedActions.text);
     const parsed = this.parseGmOutput(text);
+    // A granted ability rides on the LAST parsed message (usually the narration tail), so the
+    // offer card renders at the end of the turn and survives re-renders/rewinds with it.
+    if (strippedActions.gains.length && parsed.length) {
+      parsed[parsed.length - 1].actionGains = strippedActions.gains;
+    }
     // The player stopped this reply mid-stream: keep the partial text, but don't spend the
     // follow-up tracker calls on a reply they cut short — the tracked state simply carries over
     // from the last turn (see runGmTurn / updateTrackers).
@@ -1962,7 +1976,10 @@ export class RPEngine {
     if (this._aborted) return null;
     if (!actionText || !this.statDefs || !this.statDefs.length) { this.lastCheckInstruction = null; return null; }
     const hero = (state.character && state.character.name) || "the hero";
-    const statsCtx = buildStatsContext(this.statDefs, state.character && state.character.stats);
+    // [rpge-patch 019] The referee judges against the CURRENTLY EFFECTIVE stats (ability buffs
+    // applied by code) — a buffed hero rolls with the buffed modifier.
+    const effStats = effectiveStats(state.character, this.statDefs);
+    const statsCtx = buildStatsContext(this.statDefs, effStats);
     const cur = getCurrentTrackers(state, this.trackerDefs);
     const heroStats = (state.character && state.character.stats) || {};
     const refParts = [];

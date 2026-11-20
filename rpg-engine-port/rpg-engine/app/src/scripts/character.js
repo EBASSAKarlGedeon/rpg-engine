@@ -5,6 +5,7 @@
 // defined in the loaded world's stats config, changed only at level-up (spending stat points).
 
 import { buildStatsContext } from "./stats.js";
+import { effectiveStats, actionsContext } from "./actions.js";
 
 export function defaultCharacter() {
   return {
@@ -35,8 +36,10 @@ export function defaultCharacter() {
     trackerModes: null,     // {key: "locked"|"unlimited"} — locked = value frozen at creation;
                             // unlimited = never depletes (re-fills to its live max after every update)
     freeEdit: false,        // Hero panel ✎ toggle: edit stats/trackers mid-game without a level-up window
-    noCritFail: false       // checks ignore the critical-failure window (lowest ~5% of the die) —
+    noCritFail: false,      // checks ignore the critical-failure window (lowest ~5% of the die) —
                             // the worst roll is decided by the math (total vs DC), not auto-failed
+    actions: null,          // [rpge-patch 019] declared abilities — see actions.js; []-normalized
+                            // at load (initCharacterActions) so old saves just gain the field
   };
 }
 
@@ -59,6 +62,16 @@ export function characterSheet(c, statDefs) {
   ].filter(Boolean);
   const statsTxt = buildStatsContext(statDefs, s.stats);
   if (statsTxt) parts.push(statsTxt);
+  // [rpge-patch 019] Declared actions feed the GM both the list (honor the effects) and the
+  // CURRENTLY EFFECTIVE stat values (buffs applied by code), so narration agrees with the dice.
+  const eff = effectiveStats(s, statDefs);
+  const buffed = statDefs.some((d) => Number((eff[d.key] || 0)) !== Number(s.stats[d.key] || 0));
+  if (buffed) {
+    const effTxt = buildStatsContext(statDefs, eff);
+    if (effTxt) parts.push("EFFECTIVE STATS (with ability buffs applied — true RIGHT NOW; base values are listed above):\n" + effTxt);
+  }
+  const actTxt = actionsContext(s);
+  if (actTxt) parts.push(actTxt);
   const powers = String(s.powers || "").trim();
   if (powers) parts.push("Powers & abilities (true of this character — reflect them in the story):\n" + powers);
   return parts.join("\n");

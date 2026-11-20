@@ -51,6 +51,7 @@ const APP_HTML = `
           <div id="cmdMenu" hidden></div>
         </div>
         <button id="sceneBtn" title="Scene image">🎨</button>
+        <button id="actionsBtn" title="Actions &amp; abilities — open your hero's Actions tab">⚡</button>
         <textarea id="inputEl" rows="1"></textarea>
         <button id="sendBtn" title="Send">➤</button>
         <button id="scrollBottomBtn" type="button" title="Jump to latest" aria-label="Jump to latest" hidden>▼</button>

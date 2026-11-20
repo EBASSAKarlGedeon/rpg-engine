@@ -12,6 +12,7 @@ import { RPEngine } from "./rp-engine.js";
 import { defaultCharacter } from "./character.js";
 import { initialTrackers, getCurrentTrackers as deriveCurrentTrackers, parseTrackerBlock, extractTrackers, stripBlockForDisplay, groupByRow, liveMax, isDead, lifeTracker, levelTracker, expTracker, locationTracker, locationValue, isQuestTrackerDef, foldNpcTrackers, initialNpcTrackers, npcEnabledKeysFromFlags, npcTriggerMatches, npcTriggerSubject, stripDisabledNpcTrackerKeys, purgeNpcTrackerKeys, purgeNpcTrackerHistory, extractNpcTrackers, parseNpcTrackerBlock, npcTrackerBlockText, applyLevelUpBackstop, applyTrackerModes, applyTrackerStartOverrides } from "./trackers.js";
 import { ensureStats, clampStat, statTier, checkMod, resolveCheck } from "./stats.js";
+import { normalizeAction, parseActionStrips, effectiveStats, buffsFor, defaultActions } from "./actions.js";
 import { loadWorld, emptyWorld, WorldStore, exportWorld, worldToFile, WORLD_EXTENSION, isNsfwMeta, isCommentsOffMeta, isRemixMeta, isImportedMeta, isReservedTag, NSFW_TAG, REMIX_TAG, MAX_AUTHOR_TAGS, getWorldStarts, getWorldStart } from "./world.js";
 import { tagChipsHtml, scheduleTagFit } from "./tag-row.js";
 import { MapSystem, formatDistance, compassDir, normalizeLoc, locDetail, matchPoi, DEFAULT_ICON, mapScale, inferScaleFromPois, roundCoord } from "./map-system.js";
@@ -163,7 +164,8 @@ let ccFloor = 5; // creation-wizard floor a starting stat can be reduced to (wor
 let ccCeiling; // creation-wizard cap a starting stat can be raised to (world stats `ccCeiling`; undefined = capped only by each stat's max)
 let statAvgT = 10; // stat value below this renders red (world stats `averageThreshold`)
 let statExcT = 15; // stat value above this renders gold (world stats `exceptionalThreshold`)
-let heroTab = "stats"; // which Hero-panel tab is open ("stats" | "bio")
+let heroTab = "stats"; // which Hero-panel tab is open ("stats" | "actions" | "bio")
+let actionEditing = null; // [rpge-patch 019] Actions-tab inline editor target: null | "new" | action id
 let memTab = "manual"; // which Memory-panel sub-tab is open ("manual" | "auto" | "situation" | "threads")
 let generating = false;
 let activeStreamBubble = null; // the in-flight GM stream bubble (kept across re-renders — see render())
@@ -354,6 +356,9 @@ function initCharacterStats(c) {
     }
     c.trackerModes = Object.keys(tm).length ? tm : null;
   }
+  // [rpge-patch 019] Actions: old saves just gain an empty list; stale stat keys in deltas are
+  // dropped (re-normalized against the CURRENT world defs) so a world swap can't carry ghosts.
+  c.actions = (Array.isArray(c.actions) ? c.actions : []).map((a) => normalizeAction(a, statDefs));
   return c;
 }
 
@@ -6185,7 +6190,8 @@ async function runGmTurn({ history, actionText, opening = false, insertIndex = n
   ]);
   let check = null;
   if (decision) {
-    check = resolveCheck(decision, state.character.stats || {}, statDefs, statCfg, { noCritFail: !!(state.character && state.character.noCritFail) });
+    // [rpge-patch 019] Roll against the CURRENTLY EFFECTIVE stats — ability buffs are code math.
+    check = resolveCheck(decision, effectiveStats(state.character, statDefs), statDefs, statCfg, { noCritFail: !!(state.character && state.character.noCritFail) });
     bubble.wrap.insertBefore(checkPipEl(check, { animate: true }), bubble.row);
   }
   // NPCs this reply introduces are registered as entries BEFORE the NPC tracker call (the callback
@@ -8037,6 +8043,30 @@ function partEl(m, interactive = false) {
   const w = document.createElement("div");
   w.className = "narration";
   w.innerHTML = renderText(m.text);
+  // [rpge-patch 019] Story-gained ability offers ride on the turn's last message: an inline card
+  // the player accepts (adds to the Actions tab) or ignores. The strip itself never renders.
+  if (m.actionGains && m.actionGains.length) {
+    for (const g of m.actionGains) {
+      const accepted = m.actionGainsAccepted && (m.actionGainsAccepted.includes(g.name) || m.actionGainsAccepted === true);
+      const card = document.createElement("div");
+      card.className = "act-offer" + (accepted ? " accepted" : "");
+      card.innerHTML = `
+        <div class="act-offer-head">${esc(g.icon || "⚡")} New action discovered: <b>${esc(g.name)}</b> <span class="act-kind">${g.kind === "active" ? "active" : "passive"}</span></div>
+        ${g.effect ? `<div class="act-offer-eff">${esc(g.effect)}</div>` : ""}
+        ${accepted ? `<div class="act-offer-done">✓ Added to your Actions</div>` : `<button type="button" class="btn ok act-accept">Accept — add to Actions</button>`}`;
+      if (!accepted) card.querySelector(".act-accept").onclick = () => {
+        const done = acceptActionGain(m, g);
+        m.actionGainsAccepted = [...(Array.isArray(m.actionGainsAccepted) ? m.actionGainsAccepted : []), g.name];
+        saveCharacterQuiet();
+        card.classList.add("accepted");
+        card.innerHTML = `
+          <div class="act-offer-head">${esc(done.icon)} <b>${esc(done.name)}</b> <span class="act-kind">${done.kind === "active" ? "active" : "passive"}</span></div>
+          ${done.effect ? `<div class="act-offer-eff">${esc(done.effect)}</div>` : ""}
+          <div class="act-offer-done">✓ Added to your Actions</div>`;
+      };
+      w.appendChild(card);
+    }
+  }
   return w;
 }
 
@@ -8513,6 +8543,11 @@ function bindEvents() {
     // The 🎨 shortcut obeys the panel's Instant button toggle: instant generation, or this panel.
     if (scenePrefs().instant !== false) quickSceneImage();
     else runSceneCommand();
+  });
+  // [rpge-patch 019] ⚡ shortcut: opens the hero panel straight onto the Actions tab.
+  $("actionsBtn").addEventListener("click", () => {
+    heroTab = "actions";
+    openRailSection("right", "character");
   });
   $("inputEl").placeholder = INPUT_PLACEHOLDER;
   $("inputEl").addEventListener("keydown", (e) => {
@@ -11323,6 +11358,162 @@ function openCharacterCreation(s, onDone, onCancel) {
   })();
 }
 
+// ---- [rpge-patch 019] Actions & abilities (hero panel tab) --------------------------------
+// An action card = { id, name, icon, kind, deltas, effect, active, source } (actions.js).
+// Passive cards always apply their deltas; active ones apply them while toggled on. The GM
+// NEVER writes stats — mid-story gains arrive as machine strips the player accepts (chat card).
+
+function saveCharacterQuiet() {
+  store.save(state).catch((e) => { if (typeof isStorageError === "function" && (isStorageError(e) || (e && e.isStorageUnavailable))) { try { notifyStorageError(notify, "saving", e); } catch (_) {} } else console.warn("[session] background save failed:", e); });
+}
+
+function rerenderHeroPanelIfOpen() {
+  try {
+    const rb = railBodyEl("right");
+    if (rb && railSec("right") === "character" && isRailOpen("right")) renderCharacterPanel(rb);
+  } catch (_) {}
+}
+
+function deltasLine(a) {
+  const ks = Object.keys(a.deltas || {});
+  if (!ks.length) return "";
+  return ks.map((k) => {
+    const d = statDefs.find((x) => x.key === k);
+    const n = a.deltas[k];
+    return `${(d && (d.label || d.key)) || k} ${n > 0 ? "+" : ""}${n}`;
+  }).join(", ");
+}
+
+function actionsTabHtml(c) {
+  const acts = (Array.isArray(c.actions) ? c.actions : []);
+  const editorOpen = actionEditing === "new" || (actionEditing && acts.some((a) => a.id === actionEditing));
+  const cards = acts.map((a) => {
+    const off = a.kind === "active" && !a.active;
+    const dl = deltasLine(a);
+    return `<div class="act-card${off ? " off" : ""}" data-id="${esc(a.id)}">
+      <span class="act-ico">${esc(a.icon)}</span>
+      <div class="act-main">
+        <div class="act-name">${esc(a.name)} <span class="act-kind">${a.kind === "active" ? (a.active ? "active · on" : "active · off") : "passive"}</span>${a.source === "story" ? ` <span class="act-src" title="Gained in play — the story granted this">story</span>` : ""}</div>
+        ${dl ? `<div class="act-deltas">${esc(dl)}</div>` : ""}
+        ${a.effect ? `<div class="act-effect">${esc(a.effect)}</div>` : ""}
+      </div>
+      <div class="act-btns">
+        ${a.kind === "active" ? `<button type="button" class="mini act-toggle" title="${a.active ? "Switch off — its stat deltas stop applying" : "Switch on — its stat deltas apply now"}">${a.active ? "⏹" : "▶"}</button>` : ""}
+        <button type="button" class="mini act-edit" title="Edit this action">✎</button>
+        <button type="button" class="mini warn act-del" title="Delete this action">✕</button>
+      </div>
+    </div>`;
+  }).join("");
+  let editor = "";
+  if (editorOpen) {
+    const cur = actionEditing === "new" ? { name: "", icon: "", kind: "passive", deltas: {}, effect: "" } : acts.find((a) => a.id === actionEditing);
+    const statRows = statDefs.map((d) => {
+      const v = cur.deltas && typeof cur.deltas[d.key] === "number" ? cur.deltas[d.key] : "";
+      return `<label class="act-delta-row"><span>${esc((d.label && d.label.trim()) || d.key)}</span><input type="number" class="act-delta" data-k="${esc(d.key)}" value="${esc(v)}" placeholder="0"></label>`;
+    }).join("");
+    editor = `<div class="act-editor" data-id="${esc(actionEditing)}">
+      <div class="act-editor-title">${actionEditing === "new" ? "New action" : "Edit action"}</div>
+      <div class="act-editor-grid">
+        <label>Name <input type="text" id="actName" maxlength="60" value="${esc(cur.name)}" placeholder="All Enhancement"></label>
+        <label>Icon <input type="text" id="actIcon" maxlength="4" value="${esc(cur.icon)}" placeholder="⚡"></label>
+      </div>
+      <div class="act-kindpick">
+        <button type="button" class="seg-btn${cur.kind !== "active" ? " on" : ""}" data-kind="passive">Passive — always on</button>
+        <button type="button" class="seg-btn${cur.kind === "active" ? " on" : ""}" data-kind="active">Active — invoke it</button>
+      </div>
+      <div class="act-delta-head">Stat change while the action applies</div>
+      ${statRows || `<div class="dim">This world has no stats — the action's effect is story-only.</div>`}
+      <label class="act-effect-row">Effect (the GM must honor this)<textarea id="actEffect" rows="3" placeholder="Ten times stronger than baseline; metal bends to your hands.">${esc(cur.effect)}</textarea></label>
+      <div class="act-editor-btns">
+        <button type="button" class="btn ok" id="actSave">Save action</button>
+        <button type="button" class="btn" id="actCancel">Cancel</button>
+      </div>
+    </div>`;
+  }
+  return `
+    <div class="act-intro">Abilities the GM always knows and honors. Passive ones apply their stat change constantly; active ones only while switched on. Story-gained ones arrive as a card in the chat — accept it to keep it.</div>
+    ${cards || `<div class="act-empty dim">No actions yet. Add one yourself — or play, and when the story grants you an ability, a card will offer it here.</div>`}
+    ${editor}
+    <button type="button" class="btn act-add" ${editorOpen ? "hidden" : ""}>＋ Add action</button>`;
+}
+
+function wireActionsTab(body, c) {
+  const acts = () => (Array.isArray(c.actions) ? c.actions : (c.actions = []));
+  const add = body.querySelector(".act-add");
+  if (add) add.onclick = () => { actionEditing = "new"; renderCharacterPanel(body); };
+  body.querySelectorAll(".act-toggle").forEach((b) => (b.onclick = () => {
+    const id = b.closest(".act-card").dataset.id;
+    const a = acts().find((x) => x.id === id);
+    if (!a) return;
+    a.active = !a.active;
+    saveCharacterQuiet();
+    notify(a.active ? `${a.icon} ${a.name} is now ON — its stat change applies` : `${a.icon} ${a.name} switched off`);
+    renderCharacterPanel(body);
+  }));
+  body.querySelectorAll(".act-edit").forEach((b) => (b.onclick = () => { actionEditing = b.closest(".act-card").dataset.id; renderCharacterPanel(body); }));
+  body.querySelectorAll(".act-del").forEach((b) => (b.onclick = async () => {
+    const id = b.closest(".act-card").dataset.id;
+    const a = acts().find((x) => x.id === id);
+    if (!a) return;
+    const ok = await ConfirmPopup.open({ title: "Remove action", text: `Remove “${a.name}”? Its stat change stops applying immediately.`, okBtn: "Remove" });
+    if (!ok) return;
+    c.actions = acts().filter((x) => x.id !== id);
+    if (actionEditing === id) actionEditing = null;
+    saveCharacterQuiet();
+    notify(`${a.icon} ${a.name} removed`);
+    renderCharacterPanel(body);
+  }));
+  const ed = body.querySelector(".act-editor");
+  if (ed) {
+    ed.querySelectorAll(".act-kindpick .seg-btn").forEach((b) => (b.onclick = () => {
+      ed.querySelectorAll(".act-kindpick .seg-btn").forEach((x) => x.classList.remove("on"));
+      b.classList.add("on");
+    }));
+    const cancel = ed.querySelector("#actCancel");
+    if (cancel) cancel.onclick = () => { actionEditing = null; renderCharacterPanel(body); };
+    const save = ed.querySelector("#actSave");
+    if (save) save.onclick = () => {
+      const kind = ed.querySelector(".act-kindpick .seg-btn.on").dataset.kind;
+      const deltas = {};
+      ed.querySelectorAll(".act-delta").forEach((inp) => {
+        const n = Number(inp.value);
+        if (inp.value.trim() !== "" && Number.isFinite(n) && n !== 0) deltas[inp.dataset.k] = Math.round(n);
+      });
+      const raw = {
+        id: actionEditing === "new" ? undefined : actionEditing,
+        name: ed.querySelector("#actName").value,
+        icon: ed.querySelector("#actIcon").value,
+        kind, deltas,
+        effect: ed.querySelector("#actEffect").value,
+        active: kind === "active" && actionEditing !== "new" ? !!(acts().find((x) => x.id === actionEditing) || {}).active : false,
+        source: actionEditing === "new" ? "hero" : ((acts().find((x) => x.id === actionEditing) || {}).source || "hero"),
+      };
+      const card = normalizeAction(raw, statDefs);
+      if (actionEditing === "new") acts().push(card);
+      else {
+        const i = acts().findIndex((x) => x.id === actionEditing);
+        if (i >= 0) acts()[i] = card; else acts().push(card);
+      }
+      actionEditing = null;
+      saveCharacterQuiet();
+      notify(`${card.icon} ${card.name} saved${card.kind === "active" ? " (switch it on with ▶ when you invoke it)" : ""}`);
+      renderCharacterPanel(body);
+    };
+  }
+}
+
+// The player accepted a story-gained action card in the chat: normalize + store + refresh panels.
+function acceptActionGain(m, gain) {
+  const c = state.character;
+  if (!Array.isArray(c.actions)) c.actions = [];
+  const card = normalizeAction({ ...gain, source: "story", active: false }, statDefs);
+  c.actions.push(card);
+  saveCharacterQuiet();
+  notify(`${card.icon} ${card.name} added to your Actions —${card.kind === "active" ? " switch it on there when you invoke it" : " its effect is always on"}`);
+  rerenderHeroPanelIfOpen();
+  return card;
+}
+
 function renderCharacterPanel(body) {
   const c = state.character;
   const pts = typeof c.statPoints === "number" ? c.statPoints : 0;
@@ -11348,19 +11539,29 @@ function renderCharacterPanel(body) {
   // convention as trackers); `rules` is only ever for the GM (CHARACTER SHEET context),
   // never shown in the UI.
   const editable = windowOpen || !!c.freeEdit;
+  // [rpge-patch 019] The row shows the EFFECTIVE value (base + ability buffs, code math); the
+  // base stays visible in the badge/tooltip, and the −/+ editors always operate on the base.
+  const effStats = effectiveStats(c, statDefs);
   const statsHtml = statDefs.map((d) => {
     const val = clampStat(c.stats[d.key], d);
+    const effVal = effStats[d.key] ?? val;
+    const diff = effVal - val;
+    const buffs = buffsFor(c, d.key);
+    const buffBadge = buffs.length
+      ? ` <span class="stat-buff" title="${esc(buffs.map((b) => `${b.icon} ${b.name} ${b.amount > 0 ? "+" : ""}${b.amount}`).join("\n"))}">${diff > 0 ? "+" : ""}${diff} ${esc(buffs[0].icon)}</span>`
+      : "";
     const atMax = d.max !== undefined && val >= d.max;
     const floor = typeof floors[d.key] === "number" ? floors[d.key] : 0;
     const canDec = val > floor && val > 0;
-    const vc = statTier(val, { averageThreshold: statAvgT, exceptionalThreshold: statExcT });
+    const vc = statTier(effVal, { averageThreshold: statAvgT, exceptionalThreshold: statExcT });
+    const shown = diff ? `${val} <span class="stat-eff ${vc}">→ ${effVal}</span>` : `<span class="stat-val ${vc}">${val}</span>`;
     const ctrl = editable
       ? `<button type="button" class="mini stat-dec" data-k="${esc(d.key)}" ${canDec ? "" : "disabled"} title="Refund a point">−</button>
-         <span class="stat-val ${vc}">${val}</span>
+         ${shown}${buffBadge}
          <button type="button" class="mini ok stat-inc" data-k="${esc(d.key)}" ${(atMax || (windowOpen && pts <= 0)) ? "disabled" : ""} title="Spend a point">+</button>`
-      : `<span class="stat-val ${vc}">${val}</span>`;
+      : `${shown}${buffBadge}`;
     return `<div class="statrow">
-      ${statInfoTip(d, val)}
+      ${statInfoTip(d, effVal)}
       <span class="stat-ctrl">${ctrl}</span>
     </div>`;
   }).join("");
@@ -11414,6 +11615,8 @@ function renderCharacterPanel(body) {
     return `<div class="hero-trk-edit"><div class="cc-rev-sec">Trackers (✎ edit)</div>${rows}</div>`;
   })();
   const activeTab = hasStats ? heroTab : "bio";
+  // [rpge-patch 019] Actions tab — the hero's declared abilities, both authored and story-gained.
+  const actionsHtml = actionsTabHtml(c);
   body.innerHTML = `
     <div class="hero-avatar">${portraitHtml(c, 150)}</div>
     <div class="hero-name">
@@ -11424,12 +11627,16 @@ function renderCharacterPanel(body) {
     ${statusHtml}
     <div class="hero-tabs">
       ${hasStats ? `<button type="button" class="seg-btn${activeTab === "stats" ? " on" : ""}${windowOpen ? " lvl-open" : ""}" data-htab="stats">Stats</button>` : ""}
+      <button type="button" class="seg-btn${activeTab === "actions" ? " on" : ""}" data-htab="actions">Actions</button>
       <button type="button" class="seg-btn${activeTab === "bio" ? " on" : ""}" data-htab="bio">Profile</button>
     </div>
     ${hasStats ? `<div class="hero-tab-body" data-tab="stats" ${activeTab === "stats" ? "" : "hidden"}>
       ${banner}${statsHtml}${trkEditHtml}
       ${showSave ? `<button class="btn ok" id="cSave">Save</button>` : ""}
     </div>` : ""}
+    <div class="hero-tab-body" data-tab="actions" ${activeTab === "actions" ? "" : "hidden"}>
+      ${actionsHtml}
+    </div>
     <div class="hero-tab-body" data-tab="bio" ${activeTab === "bio" ? "" : "hidden"}>
       ${bioHtml}
       <div class="hero-av-acts">
@@ -11460,6 +11667,9 @@ function renderCharacterPanel(body) {
     heroTab = b.dataset.htab;
     renderCharacterPanel(body);
   }));
+  // [rpge-patch 019] Actions tab: card list + inline editor + active toggles.
+  const actBody = body.querySelector('.hero-tab-body[data-tab="actions"]');
+  if (actBody) wireActionsTab(actBody, c);
   // OP ✎ edit mode toggle: keeps the panel's stats −/+ alive outside level-up windows and
   // reveals the tracker editor. Persisted on the hero (per-session), not a global setting.
   const freeBtn = body.querySelector("#cFreeEdit");
