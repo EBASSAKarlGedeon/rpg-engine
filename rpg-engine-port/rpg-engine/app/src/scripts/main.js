@@ -7,6 +7,7 @@ import { historyDue, runHistorySnippet, invalidateFromTurn, migrateDigest, norma
 import { NpcLifeSystem, NPC_LIFE_EVERY_TURNS, NPC_LIFE_MAX_PER_TICK, NPC_LIFE_MIN_OFFSCREEN_TURNS, NPC_LIFE_HISTORY_MAX, NPC_LIFE_GOAL_MAX_CHARS, NPC_LIFE_WHERE_MAX_CHARS } from "./npc-life.js";
 import { NpcSystem, mergePersona, npcLinkRuleFor } from "./npc-system.js";
 import { PROSE_RULES_TEXT, proseRulesOn } from "./prose-rules.js";
+import { parsePresetJson, serializePresetExport } from "./presets.js"; // [rpge-patch 022]
 import { SCENE_DICE_EVERY_TURNS, sceneNudgeFor, sceneDiceToast } from "./scene-dice.js";
 import { RPEngine } from "./rp-engine.js";
 import { defaultCharacter } from "./character.js";
@@ -137,6 +138,34 @@ let currentWorldName = ""; // its display name, so a session can remember the wo
 let currentWorldThreadFires = true; // [rpge-patch 013] the bound world's thread-dice toggle (world.threadFires !== false)
 let currentWorldSceneDice = true; // [rpge-patch 014] the bound world's scene-dice toggle (world.sceneDice !== false)
 let engineImagePrompt = ""; // the engine's default scene-image prompt (image-prompt.md) — the fallback for worlds without imagePrompt
+
+// ---- prompt-stack preset ([rpge-patch 022]) -------------------------------------------------
+// The loaded preset is a machine-local localStorage blob (same tier as the AI provider prefs:
+// a per-device authoring choice, not story data, so it stays out of the session saves). `raw`
+// holds the imported ST preset JSON verbatim (Export round-trips it), `on` gates the stack.
+const PRESET_STORE_KEY = "rpge.promptPreset";
+let presetStore = (function () {
+  try {
+    const s = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "null");
+    if (s && typeof s === "object") return { raw: typeof s.raw === "string" ? s.raw : "", name: typeof s.name === "string" ? s.name : "", on: s.on === true };
+  } catch (e) {}
+  return { raw: "", name: "", on: false };
+})();
+let presetParsed = null; // parsePresetJson(presetStore.raw).preset when the blob is a valid preset
+function reparsePreset() {
+  const r = presetStore.raw ? parsePresetJson(presetStore.raw) : null;
+  presetParsed = (r && r.ok) ? r.preset : null;
+  if (r && !r.ok) console.warn("[rpge] stored preset no longer parses:", r.errors);
+}
+function savePresetStore() {
+  try { localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(presetStore)); } catch (e) { console.warn("[rpge] could not persist the preset:", e); }
+}
+// The engine gets the parsed preset only while the toggle is on; null = engine-native prompting.
+function presetForEngine() { return (presetStore.on && presetParsed) ? presetParsed : null; }
+// Live-apply onto an already-running engine so a toggle/import while playing takes effect on the
+// next turn (same seam applyWorld uses when building a fresh engine for a session).
+function applyPresetToEngine() { if (engine) engine.preset = presetForEngine(); }
+reparsePreset();
 let worldNameCache = {}; // worldId -> display name, for session rows (refreshed with the library)
 let gameTitle = "MNO RPG ENGINE"; // the page title from $meta (the chat topbar brand + the nav brand)
 const MNO_USER_ID = "3490f80401886d12";
@@ -841,7 +870,7 @@ function applyWorld(world, startId, customStartText) {
   statAvgT = world.statsCfg.averageThreshold;
   statExcT = world.statsCfg.exceptionalThreshold;
   npcSys = new NpcSystem(genText, genImage, { loreEntries: world.lorebook, scenarioText: world.scenario, startText: world.start, styleTags: world.imageStyleTags, negativeTags: world.imageNegativeTags, worldNpcs: world.npcs || [], npcTrackerDefs: world.npcTrackerDefs || [] });
-  engine = new RPEngine({ genText, promptText, loreEntries: world.lorebook, scenarioText: world.scenario, startText: world.start, startMode: world.startMode, vibeText: world.narrativeVibe, worldDescriptionText: world.worldDescription || "", proseRulesText: proseRulesOn(world) ? PROSE_RULES_TEXT : "", trackerDefs: world.trackerDefs, npcTrackerDefs: world.npcTrackerDefs || [], statDefs: world.statDefs, worldNpcs: world.npcs || [], checkIncludeTrackers: world.statsCfg.checkIncludeTrackers, checkIncludeNpcTrackers: world.statsCfg.checkIncludeNpcTrackers, checkTrackerKeys: world.statsCfg.checkTrackerKeys, checkNpcTrackerKeys: world.statsCfg.checkNpcTrackerKeys, useCheckInstruction: world.statsCfg.useCheckInstruction, checkInstruction: world.statsCfg.checkInstruction });
+  engine = new RPEngine({ genText, promptText, loreEntries: world.lorebook, scenarioText: world.scenario, startText: world.start, startMode: world.startMode, vibeText: world.narrativeVibe, worldDescriptionText: world.worldDescription || "", proseRulesText: proseRulesOn(world) ? PROSE_RULES_TEXT : "", trackerDefs: world.trackerDefs, npcTrackerDefs: world.npcTrackerDefs || [], statDefs: world.statDefs, worldNpcs: world.npcs || [], checkIncludeTrackers: world.statsCfg.checkIncludeTrackers, checkIncludeNpcTrackers: world.statsCfg.checkIncludeNpcTrackers, checkTrackerKeys: world.statsCfg.checkTrackerKeys, checkNpcTrackerKeys: world.statsCfg.checkNpcTrackerKeys, useCheckInstruction: world.statsCfg.useCheckInstruction, checkInstruction: world.statsCfg.checkInstruction, preset: presetForEngine() });
   mapSys = new MapSystem(genText, { lore: loreDigestFor(world, MAP_LORE_TYPES, 1500), loreEntries: world.lorebook });
 }
 
@@ -3125,6 +3154,186 @@ let settingsPanel = null; // { select(id), close() } while the panel is open, el
 // and the scene image's instant button.
 // They live in main.js rather than community.js's settings sections because all three are
 // main.js's; a future look-and-feel preference belongs in this section's shape.
+/* ---------- Prompt Preset section ([rpge-patch 022]) ---------- */
+// The author's prompt-stack editor: Import/Export speaking ST's exact chat-completion preset
+// `.json`, enable/disable/reorder/edit blocks in the global play order (prompt_order 100001).
+// A deliberately lightweight ST Prompt Manager: one list, one textarea — not ST's 5k-line wall.
+// Data mutations round-trip through reparsePreset (mutate → serialize → reparse) so presetParsed
+// (the Map + play-order copy the engine reads) is always rebuilt from the JSON the user keeps.
+function presetSection() {
+  const sec = document.createElement("section");
+  sec.className = "pf-sec pf-preset";
+  let openId = null; // the block currently expanded in the content editor (identifier), one at a time
+
+  // The global play-order group ST actually plays (character_id 100001, else the first group).
+  const orderGroup = () => {
+    if (!presetParsed) return null;
+    const g = presetParsed.data.prompt_order || [];
+    return g.find((x) => x && x.character_id === 100001) || g.find((x) => Array.isArray(x.order)) || null;
+  };
+  // Persist + live-apply: every mutation lands here. Re-serializes the edited data, re-parses so
+  // the engine's Map/order views rebuild, saves the blob, flips any running engine over.
+  const commit = () => {
+    if (!presetParsed) return;
+    presetStore.raw = JSON.stringify(presetParsed.data);
+    reparsePreset();
+    savePresetStore();
+    applyPresetToEngine();
+  };
+  const promptById = (id) => (presetParsed ? (presetParsed.data.prompts || []).find((p) => p && p.identifier === id) : null);
+  const newIdentifier = () => {
+    try { return crypto.randomUUID(); } catch (e) {}
+    return "" + Date.now() + "-" + Math.random().toString(16).slice(2, 10);
+  };
+
+  const render = () => {
+    const count = presetParsed ? presetParsed.order.filter((e) => e.enabled !== false).length : 0;
+    const group = orderGroup();
+    const entries = (group && Array.isArray(group.order)) ? group.order : [];
+    const rows = entries.map((entry, idx) => {
+      const p = promptById(entry.identifier);
+      if (!p) return ""; // an order ref with no prompt block (ST tolerates it; nothing to show)
+      const isMarker = p.marker === true;
+      const isOpen = openId === entry.identifier;
+      const badges = [
+        p.role ? String(p.role) : "",
+        p.injection_position === 1 ? "in-chat" : "",
+        isMarker ? "engine slot" : "",
+      ].filter(Boolean).map((b) => `<span class="ps-badge${isMarker ? " ps-mk" : ""}${p.injection_position === 1 ? " ps-abs" : ""}">${esc(b)}</span>`).join("");
+      return `
+        <div class="ps-row${isMarker ? " ps-row-slot" : ""}${isOpen ? " ps-open" : ""}" data-id="${esc(entry.identifier)}">
+          ${isMarker ? `<span class="ps-en" title="Engine-native slot — the engine fills this itself (character sheet, lorebook, transcript…)">—</span>` : `<input type="checkbox" class="ps-en" data-id="${esc(entry.identifier)}"${entry.enabled !== false ? " checked" : ""} title="Play this block">`}
+          <button type="button" class="ps-name" data-id="${esc(entry.identifier)}" title="${isMarker ? "Engine-native slot (read-only)" : "View / edit block content"}">${esc(p.name || entry.identifier)}</button>
+          ${badges}
+          <span class="ps-tools">
+            <button type="button" class="mini ps-up" data-id="${esc(entry.identifier)}" title="Move up"${idx === 0 ? " disabled" : ""}>▲</button>
+            <button type="button" class="mini ps-down" data-id="${esc(entry.identifier)}" title="Move down"${idx === entries.length - 1 ? " disabled" : ""}>▼</button>
+            <button type="button" class="mini ps-del" data-id="${esc(entry.identifier)}" title="Delete block"${isMarker ? " disabled" : ""}>✕</button>
+          </span>
+        </div>
+        ${isOpen && !isMarker ? `
+        <div class="ps-edit" data-id="${esc(entry.identifier)}">
+          <div class="ps-edit-row"><label>Name <input class="ps-name-in" data-id="${esc(entry.identifier)}" value="${esc(p.name || "")}"></label>
+          <label>Role <select class="ps-role" data-id="${esc(entry.identifier)}">${["system", "user", "assistant"].map((r) => `<option value="${r}"${(p.role || "system") === r ? " selected" : ""}>${r}</option>`).join("")}</select></label></div>
+          <textarea class="ps-content" data-id="${esc(entry.identifier)}" rows="10" placeholder="Block text — supports ST macros: {{user}}, {{setvar::key::value}}, {{getvar::key}}, {{roll::1d20}}, {{// comments}}…">${esc(p.content || "")}</textarea>
+          <div class="ps-edit-acts"><button type="button" class="mini ok ps-save" data-id="${esc(entry.identifier)}">Save block</button><button type="button" class="mini ps-close">Close</button></div>
+        </div>` : ""}`;
+    }).join("");
+
+    sec.innerHTML = `
+      <h3 class="pf-sec-title">Prompt Preset</h3>
+      <p class="pf-hint">Optional stack of author instruction blocks that rides into every GM prompt — imported from SillyTavern chat-completion preset <b>.json</b> files (${count ? count + " block" + (count === 1 ? "" : "s") + " playing" : "none playing"}).${presetParsed ? "" : " Import a preset below, or leave it off for the engine's own prompting."}</p>
+      <div class="pf-kv"><span class="pf-k" id="psStatus">${esc(presetParsed ? presetStore.name + (presetStore.on ? " — stack ON" : " — stack OFF") : "No preset imported")}</span></div>
+      <div class="ps-head">
+        <button type="button" class="btn" id="psImport" title="Import an ST chat-completion preset .json">⬆ Import .json</button>
+        <button type="button" class="btn" id="psExport" title="Download the current preset as ST-format .json"${presetParsed ? "" : " disabled"}>⬇ Export .json</button>
+        <button type="button" class="mini" id="psAdd" title="Append a new empty block at the end of the play order"${presetParsed ? "" : " disabled"}>＋ New block</button>
+        <input type="file" id="psFile" accept=".json,application/json" hidden>
+      </div>
+      ${entries.length ? `<div class="ps-list">${rows}</div>` : (presetParsed ? `<div class="pf-hint">This preset has no play order (prompt_order) — enable blocks by adding them with ＋ or importing a preset that has one.</div>` : "")}`;
+
+    // wiring ------------------------------------------------------------------
+    sec.querySelector("#psFile").addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = ""; // allow re-importing the same file after an edit
+      if (!f) return;
+      const fr = new FileReader();
+      fr.onload = () => {
+        const r = parsePresetJson(String(fr.result || ""));
+        if (!r.ok) { notify("✖ Import failed: " + (r.errors[0] || "unknown error")); return; }
+        presetStore = { raw: JSON.stringify(r.preset.data), name: f.name.replace(/\.json$/i, ""), on: true };
+        reparsePreset();
+        savePresetStore();
+        applyPresetToEngine();
+        notify("✓ Preset imported — " + presetParsed.order.length + " play-order entries. Stack is ON.");
+        render();
+      };
+      fr.readAsText(f);
+    });
+    sec.querySelector("#psImport").onclick = () => sec.querySelector("#psFile").click();
+    sec.querySelector("#psExport").onclick = () => {
+      if (!presetParsed) return;
+      const blob = new Blob([serializePresetExport(presetParsed)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = (presetStore.name || "preset") + ".json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    };
+    const addBtn = sec.querySelector("#psAdd");
+    if (addBtn) addBtn.onclick = () => {
+      const id = newIdentifier();
+      presetParsed.data.prompts.push({ identifier: id, name: "New block", role: "system", content: "", system_prompt: false, marker: false, injection_position: 0, injection_depth: 4, forbid_overrides: false, injection_order: 100, injection_trigger: [] });
+      const g = orderGroup();
+      if (!g) { presetParsed.data.prompt_order = presetParsed.data.prompt_order || []; presetParsed.data.prompt_order.push({ character_id: 100001, order: [] }); }
+      orderGroup().order.push({ identifier: id, enabled: true });
+      openId = id;
+      commit();
+      render();
+    };
+    sec.querySelectorAll(".ps-en").forEach((cb) => {
+      cb.onchange = () => {
+        const g = orderGroup();
+        const ent = g && g.order.find((x) => x.identifier === cb.dataset.id);
+        if (ent) ent.enabled = cb.checked;
+        commit();
+      };
+    });
+    sec.querySelectorAll(".ps-name").forEach((b) => {
+      b.onclick = () => { openId = (openId === b.dataset.id) ? null : b.dataset.id; render(); };
+    });
+    const move = (id, dir) => {
+      const g = orderGroup();
+      if (!g) return;
+      const i = g.order.findIndex((x) => x.identifier === id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= g.order.length) return;
+      const [x] = g.order.splice(i, 1);
+      g.order.splice(j, 0, x);
+      commit();
+      render();
+    };
+    sec.querySelectorAll(".ps-up").forEach((b) => { b.onclick = () => move(b.dataset.id, -1); });
+    sec.querySelectorAll(".ps-down").forEach((b) => { b.onclick = () => move(b.dataset.id, 1); });
+    sec.querySelectorAll(".ps-del").forEach((b) => {
+      b.onclick = async () => {
+        const p = promptById(b.dataset.id);
+        const ok = await ConfirmPopup.open({ title: "Delete block", message: `Delete '${(p && p.name) || b.dataset.id}' from the preset? This cannot be undone.`, confirmText: "Delete", danger: true });
+        if (!ok || !presetParsed) return;
+        presetParsed.data.prompts = presetParsed.data.prompts.filter((x) => x && x.identifier !== b.dataset.id);
+        const g = orderGroup();
+        if (g) g.order = g.order.filter((x) => x.identifier !== b.dataset.id);
+        if (openId === b.dataset.id) openId = null;
+        commit();
+        render();
+      };
+    });
+    sec.querySelectorAll(".ps-save").forEach((b) => {
+      b.onclick = () => {
+        const id = b.dataset.id;
+        const p = promptById(id);
+        if (!p) return;
+        const ta = sec.querySelector(`.ps-content[data-id="${CSS.escape(id)}"]`);
+        const nm = sec.querySelector(`.ps-name-in[data-id="${CSS.escape(id)}"]`);
+        const role = sec.querySelector(`.ps-role[data-id="${CSS.escape(id)}"]`);
+        p.content = ta ? ta.value : p.content;
+        if (nm) p.name = nm.value.trim() || p.identifier;
+        if (role) p.role = role.value;
+        commit();
+        openId = null;
+        render();
+        notify("✓ Block saved.");
+      };
+    });
+    sec.querySelectorAll(".ps-close").forEach((b) => { b.onclick = () => { openId = null; render(); }; });
+  };
+
+  render();
+  return sec;
+}
+
 function interfaceSection() {  const sec = document.createElement("section");
   sec.className = "pf-sec pf-interface";
   sec.innerHTML = `
@@ -3423,6 +3632,7 @@ function openSettingsPanel(section = null) {
     // Chrome preferences need no module of their own: the section is main.js's.
     { id: "interface", title: "Interface", load: () => interfaceSection() },
     { id: "aimodel", title: "AI Model", load: () => aiModelSection() },
+    { id: "preset", title: "Prompt Preset", load: () => presetSection() }, // [rpge-patch 022]
     { id: "imagegen", title: "Image Gen", load: () => imageGenSection() },
     { id: "backup", title: "Data & Backup", load: (mods) => mods.b.backupSection() },
     // Admin is the one section you cannot simply switch to: `ensure` is the password gate, and the

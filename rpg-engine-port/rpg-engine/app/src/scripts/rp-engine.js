@@ -11,6 +11,7 @@ import { renderHistory } from "./memory-history.js"; // [rpge-patch 009]
 import { rank as bm25Rank, tokenize as bm25Tokenize } from "./bm25.js";
 import { embedQuery, getCachedVec, cosine, fuseRrf, EMB_COS_MIN } from "./embeddings.js";
 import { subUser, heroNameOf, blankDetail, compactNpcLine, ellipsize } from "./text-utils.js";
+import { assemblePresetPrompt } from "./presets.js"; // [rpge-patch 022]
 import { NPC_LIFE_MIN_OFFSCREEN_TURNS } from "./npc-life.js";
 import { PERCHANCE_INPUT_CAP, PERCHANCE_CHARS_PER_TOKEN } from "./perchance-limits.js";
 
@@ -586,7 +587,7 @@ function bankedOffscreenEvents(state, rosterSet) {
 }
 
 export class RPEngine {
-  constructor({ genText, promptText, loreEntries = [], scenarioText = "", startText = "", startMode = "prompt", vibeText = "", worldDescriptionText = "", proseRulesText = "", trackerDefs = [], npcTrackerDefs = [], statDefs = [], worldNpcs = [], checkIncludeTrackers = false, checkIncludeNpcTrackers = false, checkTrackerKeys = [], checkNpcTrackerKeys = [], useCheckInstruction = false, checkInstruction = "" }) {
+  constructor({ genText, promptText, loreEntries = [], scenarioText = "", startText = "", startMode = "prompt", vibeText = "", worldDescriptionText = "", proseRulesText = "", trackerDefs = [], npcTrackerDefs = [], statDefs = [], worldNpcs = [], checkIncludeTrackers = false, checkIncludeNpcTrackers = false, checkTrackerKeys = [], checkNpcTrackerKeys = [], useCheckInstruction = false, checkInstruction = "", preset = null }) {
     this.lastInstruction = null;
     this.lastTrackerInstruction = null;
     this.lastNpcTrackerInstruction = null;
@@ -619,6 +620,10 @@ export class RPEngine {
     // [rpge-patch 010] The world's prose pack (anti-slop writing rules) — a per-world toggle;
     // empty string = off (nothing fed, byte-identical to pre-patch prompts).
     this.proseRulesText = proseRulesText;
+    // [rpge-patch 022] The author's prompt-stack preset (parsed ST preset — see presets.js), or
+    // null for pure engine-native prompting (byte-identical to pre-022 behavior). Assembled fresh
+    // per turn in presetAssemble ({{time}}/{{roll}} macros + setvar/getvar chains are per-turn).
+    this.preset = preset && typeof preset === "object" ? preset : null;
     this.trackerDefs = trackerDefs; // from the loaded world
     this.npcTrackerDefs = npcTrackerDefs; // from the loaded world — per-NPC tracked values (see README §6.3.1)
     this.statDefs = statDefs; // from the loaded world (player-owned attributes)
@@ -643,6 +648,19 @@ export class RPEngine {
         }
         return { name: String(n.name).trim(), details };
       });
+  }
+
+  // [rpge-patch 022] Assemble the loaded preset for THIS turn: macro context is fresh (vars,
+  // date/rolls), user = the hero. A broken preset never breaks the turn — it degrades to "no
+  // stack" with a console warn, so one bad template can't take down play.
+  presetAssemble(hero) {
+    if (!this.preset) return { inFlow: "", injections: [] };
+    try {
+      return assemblePresetPrompt(this.preset, { user: hero, char: "", now: new Date() });
+    } catch (e) {
+      console.warn("[rpge] preset assembly failed — playing this turn without the stack:", e);
+      return { inFlow: "", injections: [] };
+    }
   }
 
   // The session NPCs currently present in the scene — named in the recent chat/action/location
@@ -763,6 +781,12 @@ export class RPEngine {
     // [rpge-patch 010] Prose pack — static per world, so it rides the STABLE prefix cluster (before
     // the premise) and stays prefix-cache friendly across turns. See prose-rules.js.
     if (this.proseRulesText) parts.push("WRITING RULES (prose pack — binding for every reply):\n" + this.proseRulesText);
+    // [rpge-patch 022] The author's preset stack — enabled non-marker blocks in ST play order,
+    // macro-expanded fresh this turn ({{time}}, {{roll}}, setvar/getvar templates). Rides the
+    // STABLE cluster too (a preset's blocks are static per preset), so the prefix cache stays
+    // banked. With no preset loaded this is silent — byte-identical to pre-022 prompts.
+    const presetOut = this.presetAssemble(hero);
+    if (presetOut.inFlow) parts.push("PRESET DIRECTIVES (instructions from the author's loaded prompt preset — binding):\n" + presetOut.inFlow);
     // The current location tracker value (used by the lore selector and the SURROUNDINGS section).
     const curLocTxt = locationValue(this.trackerDefs, getCurrentTrackers(state, this.trackerDefs));
     // The same "what is the scene about" text the lorebook matcher uses, used to decide which NPCs
@@ -1306,6 +1330,14 @@ export class RPEngine {
         `[${label}] rolled ${c.die} ${modTxt} = ${c.total} vs DC ${c.dc} — ${critPass ? "CRITICAL SUCCESS" : critFail ? "CRITICAL FAILURE" : c.passed ? "SUCCESS" : nearMiss ? "NEAR MISS" : "FAILURE"}.\n` +
         guidance
       );
+    }
+    // [rpge-patch 022] ABSOLUTE preset injections (injection_position: 1) — ST drops them into the
+    // conversation right before chat history; the engine sends one assembled text, so they ride
+    // here, immediately before the final reply directive (the end-of-conversation position, i.e.
+    // depth 0). Sorted by injection_order, then play order (see presets.js). Raw text, no header —
+    // the preset author's own tags/banner are the block's identity (verbatim-import principle).
+    if (presetOut.injections.length) {
+      parts.push(presetOut.injections.map((i) => i.text).join("\n\n"));
     }
     parts.push("Now write your reply:");
     if (transcript) {
