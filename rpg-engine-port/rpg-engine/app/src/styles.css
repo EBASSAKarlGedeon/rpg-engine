@@ -2509,6 +2509,10 @@
   /* Stats / Profile tabs (hero panel; reused by the NPC popup as `.npc-tabs`) */
   .hero-tabs { display: flex; gap: 2px; margin: 16px 0 12px; }
   .hero-tab-body { display: flex; flex-direction: column; }
+  /* The flex rule above is an author style, which beats the UA's [hidden] { display: none } —
+     so the Stats/Profile tab bodies' hidden attribute was silently ignored and BOTH panes
+     rendered at once (tab clicks looked like no-ops). Explicit override restores it. */
+  .hero-tab-body[hidden] { display: none; }
   .hero-tab-body .pts-avail { margin-top: 0; }
   .hero-av-acts { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
   .hero-av-acts .btn { width: 100%; }
