@@ -523,6 +523,19 @@ async function init() {
   // mid-click (and lose its in-flight import), so when it is the mounted page it refreshes its
   // own dropdowns and the landing re-renders on the next page switch instead.
   window.addEventListener("rpge-worlds-changed", () => { try { refreshWorldNameCache(); if (homePage !== "imports") refreshLanding(); } catch (e) { /* optional */ } });
+  // [rpge-patch 026] the storage shim's boot reconcile lands seconds AFTER the landing first
+  // painted (idle callback, then list+get roundtrips): a fresh browser or a stale window shows
+  // empty Worlds/Adventures lists even though the synced data is already in IndexedDB — the user
+  // reads that as "saves didn't sync". Re-render once the sync completes, but only when entries
+  // were actually pulled (no pointless re-mounts on no-change boots). Guard: never yank a
+  // running game out of a session (homePage is null while chatting) and never tear down the
+  // import page mid-import (it refreshes its own dropdowns on this event, see loreweaver-import.js).
+  window.addEventListener("rpge-saves-synced", (ev) => {
+    try {
+      const changed = ev && ev.detail ? ev.detail.changed : 0;
+      if (changed > 0 && homePage !== null && homePage !== "imports") refreshLanding();
+    } catch (e) { /* optional */ }
+  });
   await reconcileWorldAuthors(); // bring the worlds WE authored up to date with this identity — never fatal
   memory = new MemorySystem(genText);
   npcLife = new NpcLifeSystem(genText);

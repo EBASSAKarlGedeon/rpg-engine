@@ -1043,3 +1043,39 @@ OK. Screenshots: `a02b-editor.png` (editor layout fix), `a05-wizard-actions.png`
 
 **Layout fix en route**: the editor's Name/Icon inputs used to spill out of the narrow hero
 panel (fixed-width flex row) — the grid now stacks and inputs use the standard box styling.
+
+## [rpge-patch 026] — Landing refreshes itself after the boot saves-sync
+
+**Date:** 2026-11-21. **Trigger:** user report on the repo install — "my worlds and conversations
+inside RPG-Engine weren't there; there were conflicts; the adventures aren't getting synced."
+Investigation (Loreweaver repo + both installs' `rpg-engine/kv` mirrors + the sync client state)
+showed NO data loss: the server mirror holds the full state (5 worlds, 2 adventures) and file sync
+had carried it to both devices within seconds. The visible failure was purely client-side timing.
+
+**Root cause:** the storage shim's boot reconcile runs late (`requestIdleCallback`, ≤12 s cap, then
+list+get roundtrips), while the landing renders the Worlds/Adventures lists from IndexedDB at boot.
+On a fresh browser (or a window whose IndexedDB lags the server — every device change since the
+last boot qualifies), the landing paints an empty/stale library; seconds later the reconcile pulls
+the server state into IndexedDB, but the only `rpge-saves-synced` listener was the import page's
+dropdown (`loreweaver-import.js`). The landing never re-rendered, so the user kept seeing the
+empty/stale lists until a manual reload — and read it as "saves don't sync". The recurring
+`.conflict-<ts>.json` copies in `rpg-engine/kv/` are the by-design both-sides-changed record of
+exactly these stale-local vs server-newer boots (server wins; the loser is kept server-side) —
+noisy but never data-losing.
+
+**Fix:**
+- `shims/loreweaver-storage.js`: reconcile counts the entries it pulls into IndexedDB
+  (`lastReconcilePulled`) and `rpge-saves-synced` is now a `CustomEvent` with
+  `detail.changed` (backwards compatible; import page listener unaffected).
+- `src/scripts/main.js`: the landing now listens for `rpge-saves-synced` and calls
+  `refreshLanding()` when `detail.changed > 0` — re-rendering the Worlds/Adventures lists from the
+  freshly synced store without a reload. Guards: never fires while a game session is running
+  (`homePage === null` while chatting — no mid-play yank) and skips the import page (it refreshes
+  its own dropdowns on this event; a landing re-mount would tear down its DOM mid-import, same
+  guard as the existing `rpge-worlds-changed` handler).
+
+**Verified:** `node --check` both files; `tools/check-storage.js` extended with a
+`detail.changed ≥ 1` assertion across the boot-2 pull scenario — all green.
+
+**Deploy:** dev clone → push → `git -C "%LOCALAPPDATA%/SillyTavern/Data/data/default-user/extensions/rpg-engine" pull`
+→ reload the game page. No Loreweaver-server changes; no packaged-app rebuild required for this one.

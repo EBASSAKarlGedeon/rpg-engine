@@ -204,7 +204,9 @@
   }
 
   // ---- boot reconcile (server <-> local) ----
+  let lastReconcilePulled = 0; // entries written from the server during the last reconcile
   async function reconcile(origKv) {
+    lastReconcilePulled = 0;
     const { entries } = await api("list", {});
     for (const e of entries) serverNames.add(e.name);
     const tombs = {};
@@ -246,6 +248,7 @@
         }
       }
       await folder.set(p.key, serverValue);
+      lastReconcilePulled++;
       meta[metaKey(p.folder, p.key)] = srv.mtimeMs;
     }
     // local-only keys: push unless a newer tombstone says another device deleted them
@@ -305,7 +308,9 @@
         console.info("[rpge saves] server-side saves synced.");
         // Tell late-boot pages (import/bridge panels read kv before this lands) so they can
         // re-render from server data instead of staying on their pre-sync (empty) view.
-        try { window.dispatchEvent(new Event("rpge-saves-synced")); } catch (e) {}
+        // [rpge-patch 026] detail.changed = entries pulled into IndexedDB this boot; listeners
+        // that only care about real updates (landing lists) can skip a no-change re-render.
+        try { window.dispatchEvent(new CustomEvent("rpge-saves-synced", { detail: { changed: lastReconcilePulled } })); } catch (e) {}
       })
       .catch((e) => console.warn("[rpge saves] server-side saves unavailable (local only):", (e && e.message) || e));
     if (window.requestIdleCallback) window.requestIdleCallback(go, { timeout: 12000 });

@@ -121,9 +121,14 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const s1name = nameOf("rpg", "session_1") + ".json";
   const w1name = nameOf("worlds", "w_1") + ".json";
   await page.evaluate(({ n, c }) => fetch("/__mock/put", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n, content: c }) }), { n: s1name, c: JSON.stringify({ id: "s1", turn: 9, hero: "Ashrith", editedOn: "other-device" }) });
+  // [rpge-patch 026] the reconcile fires rpge-saves-synced with detail.changed = entries pulled
+  // into IndexedDB — the landing's "re-render after sync" listener relies on this.
+  await page.addInitScript(() => { window.addEventListener("rpge-saves-synced", (e) => { window.__syncDetail = e && e.detail ? JSON.parse(JSON.stringify(e.detail)) : null; }); });
   await page.reload();
   await page.waitForFunction(() => { const e = document.getElementById("status"); return !!e && e.textContent.includes("ready kv=yes"); }, { timeout: 8000 });
   await wait(2600); // reconcile on idle
+  const syncDetail = await page.evaluate(() => window.__syncDetail);
+  if (!syncDetail || typeof syncDetail.changed !== "number" || syncDetail.changed < 1) problems.push("rpge-saves-synced did not report pulled entries: " + JSON.stringify(syncDetail));
   const pulled = await page.evaluate(async () => await window.root.kv.rpg.get("session_1"));
   if (!pulled || pulled.editedOn !== "other-device" || pulled.turn !== 9) problems.push("server-newer value did not flow into the browser: " + JSON.stringify(pulled));
   // local old value must be preserved as a conflict copy
