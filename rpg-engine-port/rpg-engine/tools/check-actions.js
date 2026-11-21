@@ -241,9 +241,20 @@ ok(/→ 11/.test(witRow || ""), "wit shows 9 → 11 while Blink Step is on");
   await p2.waitForTimeout(1000);
   const revHas = await p2.evaluate(() => !!document.querySelector("#ccReview") && document.querySelector("#ccReview").textContent.includes("Riverwalk"));
   ok(revHas, "review step lists the accepted actions");
-  await p2.evaluate(() => { document.querySelector(".cc-next").click(); }); // Begin Adventure
+  // Begin requires a hero name — fill the Bio name field first, then step forward until the
+  // button reads Begin (each click advances ONE step; review is not reachable in one jump).
+  await p2.evaluate(() => { const t = [...document.querySelectorAll(".cc-wizard .ce-tab")].find((x) => x.dataset.step === "bio"); if (t) t.click(); });
+  await p2.waitForTimeout(600);
+  await p2.evaluate(() => { const n = document.querySelector("#cc_name"); if (n) n.value = "Wren"; });
+  for (let i = 0; i < 8; i++) {
+    const label = await p2.evaluate(() => { const b = document.querySelector(".cc-next"); return b ? b.textContent : ""; });
+    if (/Begin/.test(label)) break;
+    await p2.evaluate(() => document.querySelector(".cc-next").click());
+    await p2.waitForTimeout(500);
+  }
+  await p2.evaluate(() => document.querySelector(".cc-next").click()); // Begin Adventure
   await p2.waitForTimeout(12000);
-  const opened = await p2.evaluate(() => (document.querySelector("#transcript") || { children: [] }).children.length > 0);
+  const opened = await p2.evaluate(() => (document.getElementById("transcriptEl") || { children: [] }).children.length > 0);
   ok(opened, "adventure began and the opening turn rendered");
   const finalChar = () => { try { const sess = kv2.get(b64url("rpg\u0000sessions") + ".json"); const id = JSON.parse(sess)[0].id; return JSON.parse(kv2.get(b64url("rpg\u0000session_" + id) + ".json")).character; } catch { return null; } };
   const fc = finalChar();
