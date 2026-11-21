@@ -13,7 +13,7 @@ import { RPEngine } from "./rp-engine.js";
 import { defaultCharacter } from "./character.js";
 import { initialTrackers, getCurrentTrackers as deriveCurrentTrackers, parseTrackerBlock, extractTrackers, stripBlockForDisplay, groupByRow, liveMax, isDead, lifeTracker, levelTracker, expTracker, locationTracker, locationValue, isQuestTrackerDef, foldNpcTrackers, initialNpcTrackers, npcEnabledKeysFromFlags, npcTriggerMatches, npcTriggerSubject, stripDisabledNpcTrackerKeys, purgeNpcTrackerKeys, purgeNpcTrackerHistory, extractNpcTrackers, parseNpcTrackerBlock, npcTrackerBlockText, applyLevelUpBackstop, applyTrackerModes, applyTrackerStartOverrides } from "./trackers.js";
 import { ensureStats, clampStat, statTier, checkMod, resolveCheck } from "./stats.js";
-import { normalizeAction, parseActionStrips, effectiveStats, buffsFor, defaultActions } from "./actions.js";
+import { normalizeAction, parseActionStrips, effectiveStats, buffsFor, defaultActions, detectActionToggles, applyActionToggles, normalizeActionOffer, actionGenRule } from "./actions.js"; // [rpge-patch 025]
 import { loadWorld, emptyWorld, WorldStore, exportWorld, worldToFile, WORLD_EXTENSION, isNsfwMeta, isCommentsOffMeta, isRemixMeta, isImportedMeta, isReservedTag, NSFW_TAG, REMIX_TAG, MAX_AUTHOR_TAGS, getWorldStarts, getWorldStart } from "./world.js";
 import { tagChipsHtml, scheduleTagFit } from "./tag-row.js";
 import { MapSystem, formatDistance, compassDir, normalizeLoc, locDetail, matchPoi, DEFAULT_ICON, mapScale, inferScaleFromPois, roundCoord } from "./map-system.js";
@@ -5717,6 +5717,9 @@ async function submitAction(rawText) {
   const text = String(rawText || "").trim();
   if (!text || generating) return;
   if (isGameOver()) { notify("☠ Your story has ended — delete or re-roll the fatal turn to undo fate."); return; }
+  // [rpge-patch 025] The player's own words invoke their active abilities — flip the switches
+  // BEFORE the GM call so this turn's referee/roll already plays with the buff.
+  try { autoInvokeActions(text); } catch (e) { console.warn("[actions] auto-invoke failed:", e); }
   state.messages.push({ role: "action", text, ts: Date.now() });
   state.messageCount++;
   state.turn++;
@@ -11159,6 +11162,10 @@ function openCharacterCreation(s, onDone, onCancel) {
           </div>
           <div class="cc-stats" id="ccStats"></div>
         </div>
+        <div class="cc-view" data-step="actions" hidden>
+          <p class="cc-hint">Optional — starting abilities. Generate cards that fit this world and your hero, accept the ones you like, or add your own. Passive abilities always apply; active ones wait until you invoke them in play — just say so in your action, the engine switches them on for you.</p>
+          <div id="ccActBox"></div>
+        </div>
         <div class="cc-view" data-step="trackers" hidden>
           <p class="cc-hint">Optional — tune your starting state. Set a tracker's starting value or cap, or mark it <b>Locked</b> (the story can never change it) or <b>Unlimited ∞</b> (never depletes, always at its cap). Leave everything as-is for a normal start.</p>
           <div class="cc-trks" id="ccTrks"></div>
@@ -11192,13 +11199,13 @@ function openCharacterCreation(s, onDone, onCancel) {
   let ccNoCritFail = false;  // checks ignore the critical-failure window
   // Wizard steps: Bio/Avatar/Stats/Review always; Opening prepended when the world has >1 starts.
   // Tabs are clickable so the player can switch back and forth between the opening and the hero.
-  let ccSteps = ["bio", "avatar", "stats", "review"];
+  let ccSteps = ["bio", "avatar", "stats", "actions", "review"];
   let ccStepIdx = 0;
   let ccStarts = [];
   let ccStartId = (s && s.startId) || null;
   // The player's own words when the custom opening is picked (see world.js `custom: true`).
   let ccCustomText = (s && s.customStartText) || "";
-  const wizardStepLabel = (id) => (id === "start" ? "Opening" : id === "bio" ? "Bio" : id === "avatar" ? "Avatar" : id === "stats" ? "Stats" : id === "trackers" ? "Trackers" : "Review");
+  const wizardStepLabel = (id) => (id === "start" ? "Opening" : id === "bio" ? "Bio" : id === "avatar" ? "Avatar" : id === "stats" ? "Stats" : id === "actions" ? "Actions" : id === "trackers" ? "Trackers" : "Review");
   function paintWizardTabs() {
     const tabsEl = overlay.querySelector(".ce-tabs");
     if (!tabsEl) return;
@@ -11224,10 +11231,10 @@ function openCharacterCreation(s, onDone, onCancel) {
     try {
       readBio();
       const bio = Object.fromEntries(CC_BIO_FIELDS.map(([k]) => [k, c[k] ?? ""]));
-      const touched = Object.values(bio).some((v) => (v || "").trim()) || ccIsImg(c.portrait) || ccRemaining !== ccBudget || ccFreeBuild || !!ccStartId || !!String(ccCustomText || "").trim() || !!ccTrkOverrides || !!ccTrkModes || !!String(ccPowers || "").trim() || ccNoCritFail;
+      const touched = Object.values(bio).some((v) => (v || "").trim()) || ccIsImg(c.portrait) || ccRemaining !== ccBudget || ccFreeBuild || !!ccStartId || !!String(ccCustomText || "").trim() || !!ccTrkOverrides || !!ccTrkModes || !!String(ccPowers || "").trim() || ccNoCritFail || (Array.isArray(c.actions) && c.actions.length > 0);
       const f = ccDraftKv();
       if (!touched || !f) return;
-      f.set(ccDraftKey, { bio, portrait: c.portrait || "", ccStats: { ...ccStats }, ccRemaining, ccFreeBuild, ccTrkOverrides, ccTrkModes, ccPowers, ccNoCritFail, startId: ccStartId || null, customStartText: String(ccCustomText || ""), savedAt: Date.now() }).catch(() => {});
+      f.set(ccDraftKey, { bio, portrait: c.portrait || "", ccStats: { ...ccStats }, ccRemaining, ccFreeBuild, ccTrkOverrides, ccTrkModes, ccPowers, ccNoCritFail, startId: ccStartId || null, customStartText: String(ccCustomText || ""), ccActions: JSON.parse(JSON.stringify(Array.isArray(c.actions) ? c.actions : [])), savedAt: Date.now() }).catch(() => {});
     } catch (e) {}
   }
   function saveDraftSoon() { clearTimeout(ccDraftTimer); ccDraftTimer = setTimeout(saveDraft, 800); }
@@ -11239,7 +11246,7 @@ function openCharacterCreation(s, onDone, onCancel) {
       const d = await f.get(ccDraftKey);
       if (!d || typeof d !== "object") return;
       if (d.savedAt && Date.now() - d.savedAt > 30 * 24 * 3600 * 1000) { f.delete(ccDraftKey).catch(() => {}); return; }
-      const has = (d.bio && Object.values(d.bio).some((v) => (v || "").trim())) || ccIsImg(d.portrait) || (d.ccStats && Object.keys(d.ccStats).length) || d.startId || (typeof d.customStartText === "string" && d.customStartText.trim());
+      const has = (d.bio && Object.values(d.bio).some((v) => (v || "").trim())) || ccIsImg(d.portrait) || (d.ccStats && Object.keys(d.ccStats).length) || d.startId || (typeof d.customStartText === "string" && d.customStartText.trim()) || (Array.isArray(d.ccActions) && d.ccActions.length);
       if (!has) return;
       if (d.bio) for (const [k] of CC_BIO_FIELDS) if (d.bio[k] != null) c[k] = d.bio[k];
       if (d.portrait) c.portrait = d.portrait;
@@ -11250,6 +11257,7 @@ function openCharacterCreation(s, onDone, onCancel) {
       if (d.ccTrkModes && typeof d.ccTrkModes === "object" && !Array.isArray(d.ccTrkModes)) ccTrkModes = { ...d.ccTrkModes };
       if (typeof d.ccPowers === "string") ccPowers = d.ccPowers;
       if (typeof d.ccNoCritFail === "boolean") ccNoCritFail = d.ccNoCritFail;
+      if (Array.isArray(d.ccActions) && d.ccActions.length) c.actions = d.ccActions.map((a) => normalizeAction(a, statDefs)); // [rpge-patch 025]
       if (typeof d.startId === "string" && d.startId.trim()) ccStartId = d.startId.trim();
       if (typeof d.customStartText === "string" && d.customStartText) { ccCustomText = d.customStartText; const cta = overlay.querySelector("#ccCustomText"); if (cta && !cta.value) cta.value = d.customStartText; }
       renderBio();
@@ -11316,6 +11324,7 @@ function openCharacterCreation(s, onDone, onCancel) {
       ${revStart ? `<div class="cc-rev-sec">Opening</div><div class="cc-rev-row"><span>${esc(startLabelOf(revStart, ccStarts.indexOf(revStart)))}</span><span class="dim">${esc((revStart.custom === true ? (String(ccCustomText || "").trim().replace(/\s+/g, " ").slice(0, 140) || String(revStart.description || "").trim().replace(/\s+/g, " ").slice(0, 140)) : String(revStart.description || "").trim().replace(/\s+/g, " ").slice(0, 140)) || "No description given by the author.")}</span></div>` : ""}
       ${filled.length ? `<div class="cc-rev-sec">Bio</div>` + filled.map(([k, label]) => `<div class="cc-rev-row"><span>${esc(label)}</span><span>${esc(c[k])}</span></div>`).join("") : ""}
       ${statDefs.length ? `<div class="cc-rev-sec">Stats</div><div class="cc-rev-stats">${stats}</div>` : ""}
+      ${(Array.isArray(c.actions) && c.actions.length) ? `<div class="cc-rev-sec">Actions</div>` + c.actions.map((a) => `<div class="cc-rev-row"><span>${esc(`${a.icon || ""} ${a.name || ""}`.trim())}</span><span class="dim">${a.kind === "active" ? "active — invoke in play" : "passive"}</span></div>`).join("") : ""}
       <div class="cc-rev-sec">Powers &amp; abilities</div>
       <textarea class="popup-ta" id="ccPowers" rows="4" placeholder="Free text the GM always knows about your hero — innate powers, magic, skills, items… e.g. 'Regenerates 1 HP per turn. Can read minds by touching someone.'">${esc(ccPowers)}</textarea>
       <label class="cc-freebuild cc-rev-opt"><input type="checkbox" id="ccNoCritFail"${ccNoCritFail ? " checked" : ""}><span><b>No critical failures</b> — the worst roll is decided by the math (total vs difficulty), never an auto-fail</span></label>
@@ -11509,6 +11518,34 @@ function openCharacterCreation(s, onDone, onCancel) {
     renderStats();
   }
 
+  // ---------- Actions step [rpge-patch 025] ----------
+  // Same component as the hero panel's Actions tab (cards + inline editor + ✨ generator),
+  // re-rendered into the step's own box. Edits save to the session (the hero IS s.character
+  // already — the wizard opened after the session was created) and ride the wizard draft.
+  function renderCcActions() {
+    const box = overlay.querySelector("#ccActBox");
+    if (!box) return;
+    if (!Array.isArray(c.actions)) c.actions = [];
+    box.innerHTML = actionsTabHtml(c);
+    wireActionsTab(box, c, renderCcActions, () => { store.save(s).catch(() => {}); }, ccActionCtx);
+  }
+  const ccActionCtx = async () => {
+    readBio();
+    const w = await wizardWorld();
+    const heroText = [
+      "HERO BEING FORGED: " + [c.name, c.race, c.age, c.job].filter(Boolean).join(", "),
+      c.appearance ? "Appearance: " + c.appearance : "",
+      c.persona ? "Persona: " + c.persona : "",
+      c.extra ? "Extra: " + c.extra : "",
+      String(ccPowers || "").trim() ? "Powers (player's own words): " + String(ccPowers).trim() : ""
+    ].filter(Boolean).join("\n");
+    return actionCtxFromWorld(w, {
+      heroText,
+      maxDelta: ccFreeBuild ? 10 : 3,
+      c
+    });
+  };
+
   function showStep(n) {
     ccStepIdx = Math.max(0, Math.min(n, ccSteps.length - 1));
     const cur = ccSteps[ccStepIdx];
@@ -11519,6 +11556,7 @@ function openCharacterCreation(s, onDone, onCancel) {
     next.textContent = ccStepIdx === ccSteps.length - 1 ? "⚔ Begin Adventure" : "Next →";
     showErr("");
     if (cur === "stats") renderStats();
+    if (cur === "actions") renderCcActions();
     if (cur === "trackers") renderTrackers();
     if (cur === "review") renderReview();
     if (cur === "start") renderStartPicker();
@@ -11746,8 +11784,8 @@ function openCharacterCreation(s, onDone, onCancel) {
       // have nothing a value/max/mode UI can act on).
       const hasTrk = (trackerDefs || []).some((d) => d && d.type === "number");
       ccSteps = multi
-        ? ["start", "bio", "avatar", "stats", ...(hasTrk ? ["trackers"] : []), "review"]
-        : ["bio", "avatar", "stats", ...(hasTrk ? ["trackers"] : []), "review"];
+        ? ["start", "bio", "avatar", "stats", "actions", ...(hasTrk ? ["trackers"] : []), "review"]
+        : ["bio", "avatar", "stats", "actions", ...(hasTrk ? ["trackers"] : []), "review"];
       // Keep the player where they are when the steps arrive late (they can't be on start
       // when there is no start step).
       ccStepIdx = Math.max(0, Math.min(ccStepIdx, ccSteps.length - 1));
@@ -11830,25 +11868,43 @@ function actionsTabHtml(c) {
     </div>`;
   }
   return `
-    <div class="act-intro">Abilities the GM always knows and honors. Passive ones apply their stat change constantly; active ones only while switched on. Story-gained ones arrive as a card in the chat — accept it to keep it.</div>
+    <div class="act-intro">Abilities the GM always knows and honors. Passive ones apply their stat change constantly; active ones only while switched on. Story-gained ones arrive as a card in the chat — accept it to keep it. In play, just say you invoke an active ability — the engine switches it on for you.</div>
     ${cards || `<div class="act-empty dim">No actions yet. Add one yourself — or play, and when the story grants you an ability, a card will offer it here.</div>`}
     ${editor}
-    <button type="button" class="btn act-add" ${editorOpen ? "hidden" : ""}>＋ Add action</button>`;
+    <div class="act-btnrow">
+      <button type="button" class="btn act-add" ${editorOpen ? "hidden" : ""}>＋ Add action</button>
+      <button type="button" class="btn act-gen" ${editorOpen ? "hidden" : ""}>✨ Generate</button>
+    </div>
+    <div class="act-genwrap" hidden>
+      <label class="act-fld">Direction for the AI<textarea class="act-gendir" rows="2" placeholder="e.g. abilities fitting a retired pirate haunted by his past… (blank = surprise me)"></textarea></label>
+      <div class="act-genbar"><button type="button" class="btn ok act-genrun">✨ Generate actions</button><span class="dim act-genstatus"></span></div>
+      <div class="act-offers" hidden></div>
+    </div>`;
 }
 
-function wireActionsTab(body, c) {
-  // Re-renders must target the PANEL ROOT, not this tab body — rendering the whole panel into
-  // the actions body would nest a fresh copy inside it on every toggle/edit.
-  const rr = () => rerenderHeroPanelIfOpen();
+function wireActionsTab(body, c, rerender = rerenderHeroPanelIfOpen, saveFn = saveCharacterQuiet, ctxFn = null) {
+  const rr = rerender;
   const acts = () => (Array.isArray(c.actions) ? c.actions : (c.actions = []));
   const add = body.querySelector(".act-add");
   if (add) add.onclick = () => { actionEditing = "new"; rr(); };
+  // [rpge-patch 025] ✨ Generate: ask the AI for 2–4 fitting action cards (wizard hero-forging
+  // AND the in-game tab — same machinery, different context via `ctxFn`). Offers render as
+  // Add/Skip cards; nothing is applied until the player adds one.
+  const genBtn = body.querySelector(".act-gen");
+  const genWrap = body.querySelector(".act-genwrap");
+  if (genBtn && genWrap) {
+    genBtn.onclick = () => {
+      genWrap.hidden = !genWrap.hidden;
+      if (!genWrap.hidden) { const ta = genWrap.querySelector(".act-gendir"); if (ta) ta.focus(); }
+    };
+    wireActionGen(genWrap, { c, ctxFn, saveFn, rr });
+  }
   body.querySelectorAll(".act-toggle").forEach((b) => (b.onclick = () => {
     const id = b.closest(".act-card").dataset.id;
     const a = acts().find((x) => x.id === id);
     if (!a) return;
     a.active = !a.active;
-    saveCharacterQuiet();
+    saveFn();
     notify(a.active ? `${a.icon} ${a.name} is now ON — its stat change applies` : `${a.icon} ${a.name} switched off`);
     rr();
   }));
@@ -11861,7 +11917,7 @@ function wireActionsTab(body, c) {
     if (!ok) return;
     c.actions = acts().filter((x) => x.id !== id);
     if (actionEditing === id) actionEditing = null;
-    saveCharacterQuiet();
+    saveFn();
     notify(`${a.icon} ${a.name} removed`);
     rr();
   }));
@@ -11897,11 +11953,175 @@ function wireActionsTab(body, c) {
         if (i >= 0) acts()[i] = card; else acts().push(card);
       }
       actionEditing = null;
-      saveCharacterQuiet();
+      saveFn();
       notify(`${card.icon} ${card.name} saved${card.kind === "active" ? " (switch it on with ▶ when you invoke it)" : ""}`);
       rr();
     };
   }
+}
+
+// ---- [rpge-patch 025] Generatable actions (wizard + in-game tab) ---------------------------
+// One generator, two entry points: the Forge Your Hero wizard (context = world canon + the
+// bio-as-written) and the hero panel's Actions tab during play (adds the recent story). The AI
+// only LISTS offers; Add normalizes through the same code path as every other action card.
+// World-canon context block shared by both generators.
+function actionCtxFromWorld(w, extra) {
+  const e = extra || {};
+  const worldText = w ? [
+    "World: " + ((w.meta && w.meta.name) || ""),
+    w.narrativeVibe ? "NARRATIVE VIBE:\n" + String(w.narrativeVibe).slice(0, 800) : "",
+    w.scenario ? "SCENARIO:\n" + String(w.scenario).slice(0, 1200) : "",
+    w.worldDescription ? "WORLD DESCRIPTION (canon):\n" + String(w.worldDescription).slice(0, 3000) : "",
+    (Array.isArray(w.lorebook) && w.lorebook.length) ? "WORLD LOREBOOK (canon):\n" + lorebookToText(w.lorebook, { capChars: 1500 }) : ""
+  ].filter(Boolean).join("\n\n") : "";
+  const statText = (statDefs || []).length
+    ? "STATS (key — label, start, max): " + statDefs.map((d) => `${d.key} (${d.label || d.key}, start ${d.start ?? "?"}${d.max !== undefined ? `, max ${d.max}` : ""})`).join(", ")
+    : "";
+  const c = e.c;
+  return {
+    worldText,
+    heroText: e.heroText || "",
+    statText,
+    storyText: e.storyText || "",
+    existingNames: c ? (c.actions || []).map((a) => a && a.name).filter(Boolean) : [],
+    maxDelta: e.maxDelta != null ? e.maxDelta : 3
+  };
+}
+
+// In-game context (hero panel Actions tab): world canon + the hero as played + the recent story,
+// so mid-game proposals fit what is actually happening. Buff scale is the play scale (5), or 10
+// under free-build.
+async function inGameActionCtx() {
+  const c = state.character;
+  let w = null;
+  try { w = await loadWorldById(state.worldId); } catch (_) {}
+  const heroText = [
+    "HERO: " + [c.name, c.race, c.job].filter(Boolean).join(", "),
+    c.persona ? "Persona: " + c.persona : "",
+    c.powers ? "Powers (GM ground truth): " + String(c.powers).slice(0, 800) : ""
+  ].filter(Boolean).join("\n");
+  const storyText = (state.messages || []).slice(-8)
+    .map((m) => (m && m.text ? String(m.text).replace(/\s+/g, " ").slice(0, 280) : ""))
+    .filter(Boolean).join("\n");
+  return actionCtxFromWorld(w, {
+    heroText,
+    storyText: storyText ? "RECENT STORY:\n" + storyText : "",
+    maxDelta: c.freeBuild ? 10 : 5,
+    c
+  });
+}
+
+function actionGenContextText(ctx) {
+  const c = ctx || {};
+  return [
+    c.worldText,
+    c.heroText,
+    c.statText,
+    c.storyText,
+    (c.existingNames || []).length ? "EXISTING ACTIONS (do NOT repeat): " + c.existingNames.join(", ") : ""
+  ].filter(Boolean).join("\n\n");
+}
+
+async function generateActionOffers(dir, ctx, c) {
+  const maxDelta = (ctx && ctx.maxDelta) || 3;
+  const statKeys = (statDefs || []).map((d) => d.key).join(", ");
+  const statLine = statKeys ? `STATS (keys for deltas): ${statKeys}` : "STATS: none — this world plays without attributes, so every action is effect-only (no deltas).";
+  const inst = [
+    "You propose abilities (\"actions\") for a hero in a text-based AI roleplaying game. Match the world, the hero, and the player's direction.",
+    actionGenContextText(ctx),
+    statLine,
+    dir ? "PLAYER DIRECTION (honor above all else): " + dir : "",
+    actionGenRule(maxDelta)
+  ].filter(Boolean).join("\n\n");
+  const res = await genText({ instruction: subUser(inst, (c && c.name) || ""), route: "other", maxTokens: 700 });
+  const txt = String((res && res.text) || res || "").trim();
+  let arr = null;
+  try {
+    const parsed = await parseAiJson(txt);
+    arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.actions) ? parsed.actions : [parsed]);
+  } catch (_) { arr = null; }
+  if (!Array.isArray(arr)) return [];
+  const existing = new Set(((c && c.actions) || []).map((a) => String(a.name || "").trim().toLowerCase()));
+  const out = []; const seen = new Set(); let actives = 0;
+  for (const raw of arr) {
+    const o = normalizeActionOffer(raw, statDefs, { maxDelta });
+    if (!o) continue;
+    const k = o.name.toLowerCase();
+    if (existing.has(k) || seen.has(k)) continue;
+    seen.add(k);
+    if (o.kind === "active") { if (actives >= 1) o.kind = "passive"; else actives++; } // soft cap: extras demote
+    out.push(o);
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+function wireActionGen(wrap, opts) {
+  const ta = wrap.querySelector(".act-gendir");
+  const run = wrap.querySelector(".act-genrun");
+  const status = wrap.querySelector(".act-genstatus");
+  const offersEl = wrap.querySelector(".act-offers");
+  if (!run || !offersEl || !opts || !opts.ctxFn) return;
+  run.onclick = async () => {
+    setBusy(run, "Generating…");
+    if (status) status.textContent = "Dreaming up actions…";
+    try {
+      const ctx = await opts.ctxFn();
+      const offers = await generateActionOffers((ta && ta.value.trim()) || "", ctx, opts.c);
+      if (!offers.length) throw new Error("the AI offered nothing usable — try again");
+      paintActionOffers(offersEl, offers, opts);
+      if (status) status.textContent = "Add the ones you like — Skip discards a card.";
+      offersEl.hidden = false;
+    } catch (e) {
+      console.error("action generation failed:", e);
+      if (status) status.textContent = "⚠ " + (e && e.message ? e.message : "Generation failed.");
+      offersEl.hidden = true; offersEl.innerHTML = "";
+    } finally { clearBusy(run); }
+  };
+}
+
+function paintActionOffers(offersEl, offers, opts) {
+  const list = offers.slice();
+  const paint = () => {
+    offersEl.innerHTML = list.map((o, i) => `<div class="act-offer" data-i="${i}">
+      <div class="act-offer-head">${esc(o.icon)} <b>${esc(o.name)}</b> <span class="act-kind">${o.kind}</span></div>
+      ${deltasLine(o) ? `<div class="act-deltas">${esc(deltasLine(o))}</div>` : ""}
+      ${o.effect ? `<div class="act-offer-eff">${esc(o.effect)}</div>` : ""}
+      <div class="act-offer-btns"><button type="button" class="mini ok act-offer-add" data-i="${i}">✓ Add</button><button type="button" class="mini act-offer-skip" data-i="${i}">✕ Skip</button></div>
+    </div>`).join("");
+    offersEl.querySelectorAll(".act-offer-add").forEach((b) => (b.onclick = () => {
+      const o = list[+b.dataset.i];
+      if (!o) return;
+      const card = normalizeAction({ ...o, source: "hero", active: false }, statDefs);
+      if (!Array.isArray(opts.c.actions)) opts.c.actions = [];
+      opts.c.actions.push(card);
+      list.splice(+b.dataset.i, 1);
+      if (opts.saveFn) { try { opts.saveFn(); } catch (_) {} }
+      notify(`${card.icon} ${card.name} added to your Actions${card.kind === "active" ? " — invoke it in play to switch it on" : ""}`);
+      paint();
+      if (opts.rr) opts.rr();
+    }));
+    offersEl.querySelectorAll(".act-offer-skip").forEach((b) => (b.onclick = () => {
+      list.splice(+b.dataset.i, 1);
+      paint();
+    }));
+    if (!list.length) { offersEl.hidden = true; offersEl.innerHTML = ""; }
+  };
+  paint();
+}
+
+// Auto-invoke: the player's own submitted action text flips their active abilities. Runs BEFORE
+// the GM call, so this turn's referee/roll already uses the buff. Idempotent ("invoke" while on
+// changes nothing); dismissal beats invocation; a bare mention without a cue changes nothing.
+function autoInvokeActions(text) {
+  const c = state && state.character;
+  if (!c || !text) return;
+  const det = detectActionToggles(text, c);
+  if (!det.on.length && !det.off.length) return;
+  const changed = applyActionToggles(det);
+  for (const a of changed) notify(`${a.icon} ${a.name} ${a.active ? "is now ON — its stat change applies" : "switched off"}`);
+  saveCharacterQuiet();
+  rerenderHeroPanelIfOpen();
 }
 
 // The player accepted a story-gained action card in the chat: normalize + store + refresh panels.
@@ -12070,8 +12290,9 @@ function renderCharacterPanel(body) {
     renderCharacterPanel(body);
   }));
   // [rpge-patch 019] Actions tab: card list + inline editor + active toggles.
+  // [rpge-patch 025] …plus the ✨ generator (context = world canon + hero + recent story).
   const actBody = body.querySelector('.hero-tab-body[data-tab="actions"]');
-  if (actBody) wireActionsTab(actBody, c);
+  if (actBody) wireActionsTab(actBody, c, rerenderHeroPanelIfOpen, saveCharacterQuiet, inGameActionCtx);
   // OP ✎ edit mode toggle: keeps the panel's stats −/+ alive outside level-up windows and
   // reveals the tracker editor. Persisted on the hero (per-session), not a global setting.
   const freeBtn = body.querySelector("#cFreeEdit");

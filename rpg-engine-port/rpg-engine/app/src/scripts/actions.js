@@ -111,3 +111,101 @@ export const ACTION_GAIN_RULE = [
   "[ACTION: Name | passive or active | str +3, agi -1 | One-sentence effect you must honor.]",
   "Fields: short Name (no pipes); kind passive (always on) or active (the hero must invoke it); stat deltas use ONLY the STATS keys above (omit the segment if none); effect is what the action does. Omit the whole line when nothing is granted this turn."
 ].join("\n");
+
+// ---- [rpge-patch 025] Auto-invoke + generatable actions ------------------------------------
+// The PLAYER'S OWN WORDS toggle their ACTIVE actions. When a submitted action mentions an
+// ability's name in a sentence that also reads as an invocation, the engine flips the switch
+// BEFORE the GM call — this turn's referee and roll already play with the buff. No confirmation
+// card: the player declared it, that IS the instruction. The AI is never involved in toggling
+// (no strip, the GM cannot flip switches) — state changes come only from the player's text.
+// A bare mention without an invocation cue ("Blink Step saved me last week") changes nothing.
+const INVOKE_CUE_RE = /\b(?:invoke|invokes|invoked|invoking|activate|activates|activated|activating|use|uses|used|using|cast|casts|casting|channel|channels|channeling|unleash|unleashes|unleashing|trigger|triggers|triggered|call upon|calls upon|calling upon|tap into|taps into|tapping into|power up|powers up)\b/i;
+const DISMISS_CUE_RE = /\b(?:dismiss|dismisses|dismissed|deactivate|deactivates|deactivated|dispel|dispels|dispelled|switch off|switches off|shut off|shuts off|turn off|turns off|stop using|stops using|cancel|cancels|stow|stows|release|releases|end|ends|ended|drop|drops|dropped)\b/i;
+
+// Sentence split good enough for toggle detection: hard breaks + terminal punctuation. Abbrev-
+// false-positives only cost a missed/extra sentence boundary — the name+cue pairing inside each
+// sentence is what decides.
+function toggleSentences(text) {
+  return String(text || "")
+    .split(/(?<=[.!?:;])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function sentenceNamesAction(name, sentence) {
+  const esc = String(name || "").trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!esc) return false;
+  try {
+    return new RegExp("(^|[^\\p{L}\\p{N}])" + esc + "([^\\p{L}\\p{N}]|$)", "iu").test(sentence);
+  } catch (_) { return sentence.toLowerCase().includes(esc.toLowerCase()); }
+}
+
+// Which active actions does this player text turn ON / OFF? Returns {on:[action], off:[action]}
+// (direct references into character.actions; NOT yet applied). Dismissal beats invocation when
+// a sentence carries both kinds of cue. Already-correct states are omitted (idempotent).
+export function detectActionToggles(text, character) {
+  const acts = ((character && character.actions) || []).filter((a) => a && a.kind === "active");
+  const sents = toggleSentences(text);
+  const on = [], off = [];
+  for (const a of acts) {
+    if (!a.name) continue;
+    let wantOn = false, wantOff = false;
+    for (const s of sents) {
+      if (!sentenceNamesAction(a.name, s)) continue;
+      if (DISMISS_CUE_RE.test(s)) wantOff = true;
+      else if (INVOKE_CUE_RE.test(s)) wantOn = true;
+    }
+    if (wantOff && a.active) off.push(a);       // dismissal wins over invocation
+    else if (wantOn && !a.active) on.push(a);
+  }
+  return { on, off };
+}
+
+// Apply a detectActionToggles result in place. Returns the actions whose state actually changed
+// (caller toasts/saves them).
+export function applyActionToggles(det) {
+  const d = det && typeof det === "object" ? det : { on: [], off: [] };
+  const changed = [];
+  for (const a of d.on || []) if (a && a.kind === "active" && !a.active) { a.active = true; changed.push(a); }
+  for (const a of d.off || []) if (a && a.kind === "active" && a.active) { a.active = false; changed.push(a); }
+  return changed;
+}
+
+// Validate + clamp ONE AI-proposed action offer (wizard / Actions-tab generator): unknown stat
+// keys dropped, |delta| clamped to maxDelta (creation scale — buffs later may exceed the max,
+// but generated STARTING abilities stay inside the budget; free-build widens the clamp), zeros
+// dropped, name required. Returns a plain offer object (no id yet — Add normalizes via
+// normalizeAction) or null when unusable.
+export function normalizeActionOffer(raw, statDefs, opts) {
+  const r = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null;
+  if (!r) return null;
+  const name = String(r.name || "").trim().slice(0, 60);
+  if (!name) return null;
+  const o = opts || {};
+  const maxDelta = Number.isFinite(o.maxDelta) ? Math.abs(o.maxDelta) : 3;
+  const statKeys = new Set((statDefs || []).map((d) => d.key));
+  const deltas = {};
+  const src = r.deltas && typeof r.deltas === "object" ? r.deltas : {};
+  for (const k of Object.keys(src)) {
+    if (!statKeys.has(k)) continue;
+    const n = Math.round(Number(src[k]));
+    if (!Number.isFinite(n) || n === 0) continue;
+    deltas[k] = Math.max(-maxDelta, Math.min(maxDelta, n));
+  }
+  const kind = r.kind === "active" ? "active" : "passive";
+  const icon = String(r.icon || "").trim().slice(0, 4) || (kind === "active" ? "⚡" : "✦");
+  const effect = String(r.effect || "").trim().slice(0, 300);
+  return { name, icon, kind, deltas, effect };
+}
+
+// The offer-generation prompt block (main.js assembles the context around it).
+export function actionGenRule(maxDelta) {
+  const cap = Number.isFinite(maxDelta) ? Math.abs(maxDelta) : 3;
+  return [
+    "PROPOSING HERO ACTIONS (abilities the GM must always honor):",
+    `Return a JSON ARRAY of 2–4 action objects. Each object: {"name": short name (no pipes), "icon": ONE emoji, "kind": "passive" or "active", "deltas": {"stat_key": ±N}, "effect": one sentence}.`,
+    `deltas use ONLY the STATS keys given above, each |value| ≤ ${cap}. kind "passive" = always applies; "active" = the hero must invoke it — at most ONE active unless the direction asks for more.`,
+    "effect: ≤ 25 words, phrased as a lasting capability (what it does and what it costs/limits, if any). No duplicates of the hero's existing actions.",
+    "Reply with ONLY the JSON array — no prose, no code fence. Strict valid JSON: double quotes, no trailing commas."
+  ].join("\n");
+}
