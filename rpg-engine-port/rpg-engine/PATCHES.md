@@ -983,3 +983,63 @@ sources (no free reachability probe exists for them). Server tests 41/41 (per-so
 response-mapper parity, internal dispatch, video guards, NovelAI guard, closestAspectRatio/
 closestSize); check-sdfollow 16/16. Live re-check after deploy: endpoint correctly reports the
 unreachable state + --listen hint when ComfyUI is not running (user had closed it).
+
+---
+
+## [rpge-patch 025] — Generatable actions + auto-invoke
+
+**Goal**: close out the Actions feature (019) with the two missing halves — abilities you can
+*generate* rather than hand-write (in the hero-forging wizard AND during play), and active
+abilities that switch themselves on when you say you use them.
+
+**Entry point A — Forge Your Hero gets an Actions step** (between Stats and Trackers; present
+whether or not the world has multi-start openings or number trackers). The step renders the SAME
+shared component as the in-game hero panel Actions tab — `actionsTabHtml` + `wireActionsTab`,
+now parameterized: `wireActionsTab(body, c, rerender, saveFn, ctxFn)` (the hero panel keeps its
+defaults; the wizard passes its own re-render + `store.save(s)` + a wizard-context builder).
+Cards, the inline editor, active ⏹/▶ toggles and deletion all work identically; edits persist to
+the session immediately and ride the wizard draft (`ccActions` in the draft blob, re-normalized
+on restore). The Review step lists the accepted actions.
+
+**Entry point B — ✨ Generate in the in-game Actions tab** — same button, same machinery.
+
+**Generation** (one shared path, `generateActionOffers`): a content-rich instruction — world canon
+(vibe/scenario/worldDescription/lorebook via `actionCtxFromWorld`) + hero text (wizard: the
+bio-as-written + Powers; in-game: persona/powers + the last 8 messages as RECENT STORY) + the
+world's stat keys with starts/maxes + existing action names (no repeats) + the player's optional
+direction — then `actionGenRule` demands a strict JSON ARRAY of 2–4 offers (delta cap: 3 at
+forging, 5 in play, 10 under free-build). Replies parse through `parseAiJson`, validate through
+the new `normalizeActionOffer` (unknown stat keys dropped, |delta| clamped, zeros dropped, name
+required, icon ≤ 2 code points), dedupe against existing actions, and soft-cap actives at one
+(extras demote to passive, visible on the card). Offers render as Add/Skip cards; **Add**
+normalizes through the exact same `normalizeAction` path as every other action card with
+`source:"hero"` — the AI never writes stats, it only lists cards. Route: `other` (same as
+Generate Hero).
+
+**Auto-invoke** — active abilities toggle from the player's OWN submitted text, before the GM
+call so the turn's referee/roll already plays with the buff (no confirmation card: the player
+declaring it IS the instruction; the GM can never flip switches). `detectActionToggles` matches
+per SENTENCE: the action name (word-boundary, case-insensitive) + an invocation cue
+(invoke/use/cast/channel/unleash/trigger/call upon/tap into/power up…) → ON; a dismissal cue
+(dismiss/deactivate/dispel/switch off/turn off/shut off/stop using/cancel/stow/release/end/drop…)
+→ OFF, and dismissal beats invocation. A bare mention ("Blink Step saved me last week") changes
+nothing; already-correct states are no-ops. `applyActionToggles` applies and reports what
+changed; the submit path (`submitAction`) toasts each flip and saves. Toggles persist through
+re-rolls (documented behavior).
+
+**Harness bug fixed en route**: `check-actions.js` had gone stale — a fresh browser profile
+reads kv BEFORE the first server reconcile (boot race), so the seeded session never resumed. It
+now follows the seed → settle → reseed → reload recipe, and the AI path is exercised through a
+content-aware mock on `/api/backends/chat-completions/*` (marker → offer arrays; everything else
+→ plain prose; SSE and JSON both handled).
+
+**Verified**: `tools/check-actions-auto.js` 27/27 pure Node (detection matrix, idempotence,
+dismissal-wins, word-boundary guard, passive exclusion, offer clamp/validation, rule text);
+`tools/check-actions.js` full browser harness all green incl. new sections 4 (auto-invoke ON/OFF
+via the composer, mention-without-cue inert) and 5 (wizard: picker → wizard → Actions step →
+generated offers → Add/Skip → manual add → review lists actions → Begin with a mocked opening →
+actions survive with source=hero); `check-regex` OK, `check-presets` 106/106, `check-preset-ui`
+OK. Screenshots: `a02b-editor.png` (editor layout fix), `a05-wizard-actions.png` (wizard step).
+
+**Layout fix en route**: the editor's Name/Icon inputs used to spill out of the narrow hero
+panel (fixed-width flex row) — the grid now stacks and inputs use the standard box styling.
