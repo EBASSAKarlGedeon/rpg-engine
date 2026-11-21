@@ -12,22 +12,28 @@ const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems
 (async () => {
   const kv = new Map();
   const put = (folder, key, val) => kv.set(b64url(folder + "\u0000" + key) + ".json", JSON.stringify(val));
-  const s = makeSession();
-  // The latest GM narration already carries a story-gained action offer (as parseActionStrips
-  // would have stamped it) plus one accepted passive card earlier in the session.
-  s.character.stats = { str: 12, wit: 9 };
-  s.character.actions = [
-    { id: "act-seed", name: "Iron Stomach", icon: "🍖", kind: "passive", deltas: { grit: 1 }, effect: "Raw food never sickens you.", active: false, source: "hero" }
-  ];
-  const lastMsg = s.messages[s.messages.length - 1];
-  lastMsg.actionGains = [
-    { name: "All Enhancement", icon: "✨", kind: "passive", deltas: { grit: 30 }, effect: "Ten times stronger than baseline; metal bends to your hands." }
-  ];
-  put("worlds", "wstress", makeWorld());
-  put("worlds", "index", [{ id: "wstress", name: "Stress Test Valley", cover: "", tags: [], description: "test", nsfw: false, author: "", authorId: "", remix: null, origin: "", createdAt: "2026-01-01", updatedAt: "2026-01-01" }]);
-  put("rpg", "sessions", [{ id: s.id, name: s.name, charName: "Wren", worldId: "wstress", worldName: "Stress Test Valley", turn: 11, lastUpdated: 1700000000000, avatar: "", portraitSig: "" }]);
-  put("rpg", "session_" + s.id, s);
-  put("rpg", "activeSession", s.id);
+  // Seed is a function: a fresh browser profile reads kv BEFORE the first server reconcile lands
+  // (boot race — the heavy-session.js lesson), so the recipe is seed → boot → reseed → reload.
+  const seed = () => {
+    const s = makeSession();
+    // The latest GM narration already carries a story-gained action offer (as parseActionStrips
+    // would have stamped it) plus one accepted passive card earlier in the session.
+    s.character.stats = { str: 12, wit: 9 };
+    s.character.actions = [
+      { id: "act-seed", name: "Iron Stomach", icon: "🍖", kind: "passive", deltas: { grit: 1 }, effect: "Raw food never sickens you.", active: false, source: "hero" }
+    ];
+    const lastMsg = s.messages[s.messages.length - 1];
+    lastMsg.actionGains = [
+      { name: "All Enhancement", icon: "✨", kind: "passive", deltas: { grit: 30 }, effect: "Ten times stronger than baseline; metal bends to your hands." }
+    ];
+    put("worlds", "wstress", makeWorld());
+    put("worlds", "index", [{ id: "wstress", name: "Stress Test Valley", cover: "", tags: [], description: "test", nsfw: false, author: "", authorId: "", remix: null, origin: "", createdAt: "2026-01-01", updatedAt: "2026-01-01" }]);
+    put("rpg", "sessions", [{ id: s.id, name: s.name, charName: "Wren", worldId: "wstress", worldName: "Stress Test Valley", turn: 11, lastUpdated: 1700000000000, avatar: "", portraitSig: "" }]);
+    put("rpg", "session_" + s.id, s);
+    put("rpg", "activeSession", s.id);
+    return s;
+  };
+  const s = seed();
   const readChar = () => { try { return JSON.parse(kv.get(b64url("rpg\u0000session_" + s.id) + ".json")).character; } catch { return null; } };
 
   const browser = await chromium.launch();
@@ -43,7 +49,10 @@ const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems
     return r.fulfill({ json: { ok: true } });
   });
   await page.goto(APP_URL, { waitUntil: "load", timeout: 90000 });
-  await page.waitForTimeout(20000);
+  await page.waitForTimeout(15000);
+  seed(); // reseed after boot settles, then reload — without this the fresh profile resumes nothing
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(15000);
 
   console.log("1) chat offer card renders and accepts");
   const offer = await page.evaluate(() => {
@@ -84,6 +93,12 @@ const ok = (cond, msg) => { if (cond) console.log("  ok:", msg); else { problems
   // toggle the seeded active? none active — add a new ACTIVE action via the editor.
   await page.evaluate(() => { document.querySelector(".act-add").click(); });
   await page.waitForTimeout(600);
+  await page.evaluate(() => {
+    document.querySelector("#actName").value = "Blink Step";
+    document.querySelector("#actIcon").value = "🌫";
+  });
+  await page.evaluate(() => { const e = document.querySelector(".act-editor"); if (e) e.scrollIntoView({ block: "center" }); });
+  await page.screenshot({ path: SHOT + "a02b-editor.png" }); // editor layout: Name/Icon inputs must fit the panel
   await page.evaluate(() => {
     document.querySelector("#actName").value = "Blink Step";
     document.querySelector("#actIcon").value = "🌫";
