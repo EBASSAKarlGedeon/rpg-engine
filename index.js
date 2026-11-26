@@ -1,10 +1,13 @@
 // Import from SillyTavern core
-import { extension_settings, getContext, loadExtensionSettings } from "../../../extensions.js";
-import { saveSettingsDebounced } from "../../../../script.js";
+// Absolute paths on purpose: this folder used to live one level deeper (extensions/third-party/),
+// so a relative ../../.. silently 404s after the move and the whole extension never registers.
+import { extension_settings, getContext, loadExtensionSettings } from "/scripts/extensions.js";
+import { saveSettingsDebounced } from "/script.js";
 
 // Extension name MUST match folder name
 const extensionName = "rpg-engine";
-const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
+// Derived from this module's own URL, so the settings HTML resolves wherever the folder sits.
+const extensionFolderPath = new URL(".", import.meta.url).pathname.replace(/^\//, "").replace(/\/$/, "");
 
 // Same-window overlay page: the full game. The old bridge/imports overlay pages are gone
 // since [rpge-patch 018] — their logic lives INSIDE the game app now (Settings → AI Model
