@@ -3921,7 +3921,18 @@ function renderCover(v) {
   async function runNpcAi(rawText, statusEl) {
     const g = window.genText;
     const setStatus = (msg, bad) => { if (!statusEl) return; statusEl.textContent = msg || ""; statusEl.classList.toggle("bad", !!bad); };
-    if (!rawText || !rawText.trim()) { setStatus("✋ Describe the NPC first.", true); return; }
+    if (!rawText || !rawText.trim()) {
+      // Empty-box Generate (feature request): the World Cast box is the real place this is used.
+      // When the world already says something — Description or any Lorebook entry — the model is
+      // told to profile a canon character and copy details verbatim instead of inventing one.
+      const hasDesc = !!String(M.worldDescription || "").trim();
+      const hasLore = !!(M.lorebook || []).some((e) => String((e && (e.content || e.text)) || "").trim());
+      if (!hasDesc && !hasLore) {
+        setStatus("✋ Describe the NPC first — this world has no Description or Lorebook to draw on.", true);
+        return;
+      }
+      rawText = "Create one canon NPC from this world's Description and Lorebook. Use only what is written there and copy names and details verbatim; do not invent.";
+    }
     if (!g) { setStatus("✋ No text AI available.", true); return; }
     const btn = overlay.querySelector("#ceNpcRun");
     setBusy(btn, "Generating…");
