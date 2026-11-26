@@ -19,6 +19,8 @@ const UPDATE_BANNER_HTML = `<div id="updateBanner" hidden><span class="ub-dot"><
 // Byte-identical to the old index.html `#landing` inner markup (so styles.css applies unchanged),
 // except the logo now carries width/height: its size used to come only from styles.css, so a cold
 // load painted it gigantic before the stylesheet arrived.
+import { initStBackground } from "./st-background.js";
+
 const LANDING_HTML = `
   <div id="ldBg"></div>
   <div id="ldScrim"></div>
@@ -61,6 +63,7 @@ export function ensureLandingShell() {
     landing.innerHTML = LANDING_HTML;
     document.body.appendChild(landing);
   }
+  initStBackground();
   return landing;
 }
 
