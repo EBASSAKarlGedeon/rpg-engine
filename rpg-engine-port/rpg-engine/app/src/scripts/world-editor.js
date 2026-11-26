@@ -4138,10 +4138,30 @@ function renderCover(v) {
     pop.querySelector(".popup-cancel").focus();
   }
 
+  // Empty-box Generate (feature request): with nothing typed into the stat/tracker box, ground the
+  // request in what the world already says — the Description plus every Lorebook entry, verbatim.
+  // One definition per click: the requested ceiling is two, so a click never floods the list, and
+  // the model is asked for exactly one so the existing single-row parser stays honest.
+  function worldDefSource(kind) {
+    const parts = [];
+    const desc = String((M && (M.description || (M.meta && M.meta.description))) || "").trim();
+    if (desc) parts.push(desc);
+    for (const e of ((M && M.lorebook) || [])) {
+      const t = String((e && (e.content || e.text)) || "").trim();
+      if (t) parts.push(t);
+    }
+    const body = parts.join("\n\n").trim().slice(0, 12000);
+    if (!body) return "";
+    return "Propose one " + (kind === "stat" ? "stat" : "tracker") + " that fits this world, judged only from the text below:\n\n" + body;
+  }
+
   async function runDefAi(kind, rawText, statusEl) {
     const g = window.genText;
     const setStatus = (msg, bad) => { if (!statusEl) return; statusEl.textContent = msg || ""; statusEl.classList.toggle("bad", !!bad); };
-    if (!rawText || !rawText.trim()) { setStatus("Describe it first.", true); return; }
+    if (!rawText || !rawText.trim()) {
+      rawText = worldDefSource(kind);
+      if (!rawText) { setStatus("Describe it first — this world has no Description or Lorebook to draw on.", true); return; }
+    }
     if (!g) { setStatus("No text AI available.", true); return; }
     const btnIds = { stat: "#ceStatRun", trk: "#ceTrkRun", ntrk: "#ceNtrkRun" };
     const what = kind === "stat" ? "Stat" : (kind === "ntrk" ? "NPC tracker" : "Tracker");
