@@ -12683,6 +12683,7 @@ function promptNewNpc() {
           <textarea class="popup-ta" id="newNpcDesc" rows="3" placeholder="What you know about them — role, looks, how you met (optional)"></textarea>
         </div>
         <div class="popup-acts">
+          <button class="mini" id="newNpcGen" title="Fill this from the world's Description and Lorebook — only dares to invent when both are empty">✨ Generate</button>
           <button class="mini popup-cancel">Cancel</button>
           <button class="mini ok popup-save">Create</button>
         </div>
@@ -12690,6 +12691,46 @@ function promptNewNpc() {
     const nameEl = overlay.querySelector("#newNpcName");
     const descEl = overlay.querySelector("#newNpcDesc");
     const grab = () => ({ name: nameEl.value.trim(), desc: descEl.value.trim() });
+
+    // Empty-box Generate (feature request): with both boxes empty the button fills them; as soon as
+    // the user types anything it goes quiet instead of overwriting a word they wrote. The source is
+    // the world's Description + Lorebook, quoted VERBATIM; only when both are empty may the model
+    // invent. Route "other", so it can be switched off in AI settings without touching the GM.
+    const genBtn = overlay.querySelector("#newNpcGen");
+    const syncGen = () => { genBtn.disabled = !!(nameEl.value.trim() || descEl.value.trim()); };
+    nameEl.addEventListener("input", syncGen);
+    descEl.addEventListener("input", syncGen);
+    syncGen();
+    genBtn.onclick = async () => {
+      const label = genBtn.textContent;
+      genBtn.disabled = true; genBtn.textContent = "✨ …";
+      try {
+        const kv = window.root && window.root.kv;
+        const world = kv ? await kv.worlds.get(state.worldId) : null;
+        const worldText = String((world && (world.description || (world.meta && world.meta.description))) || "").trim();
+        const lore = ((world && world.lorebook) || []).map((e) => String((e && (e.content || e.text)) || "").trim()).filter(Boolean).join("\n\n");
+        const sources = [worldText, lore].filter(Boolean).join("\n\n");
+        const prompt = sources
+          ? ["You are filling in a new NPC for a text RPG. Use ONLY the source text below.",
+             "Copy VERBATIM: every word of the answer must already appear in the source. Do not invent, paraphrase, or add anything.",
+             'Return ONLY minified JSON: {"name":"a name that appears in the source","desc":"the passage that describes that character, copied word for word"}',
+             "", sources].join("\n")
+          : ["Invent one NPC for a text RPG.", 'Return ONLY minified JSON: {"name":"...","desc":"2-3 sentences"}', "", "World: " + (state.worldName || "unnamed")].join("\n");
+        const raw = await routedGenText(prompt, { route: "other" });
+        const text = typeof raw === "string" ? raw : (raw && (raw.text || raw.content || raw.response || ""));
+        const s = String(text || "").replace(/^\`\`\`(json)?/i, "").replace(/\`\`\`$/, "").trim();
+        const a = s.indexOf("{"), b = s.lastIndexOf("}");
+        const j = a >= 0 && b > a ? JSON.parse(s.slice(a, b + 1)) : null;
+        if (!j) throw new Error("the model returned no JSON");
+        if (j.name && !nameEl.value.trim()) nameEl.value = String(j.name).trim().slice(0, 80);
+        if (j.desc && !descEl.value.trim()) descEl.value = String(j.desc).trim().slice(0, 800);
+      } catch (e) {
+        notify("Generate failed: " + (e && e.message || e));
+      } finally {
+        genBtn.textContent = label;
+        syncGen();
+      }
+    };
     const release = pushBackClose(() => done(null));
     const done = (v) => { release(); overlay.remove(); resolve(v); };
     overlay.querySelector(".popup-x").onclick = () => done(null);
