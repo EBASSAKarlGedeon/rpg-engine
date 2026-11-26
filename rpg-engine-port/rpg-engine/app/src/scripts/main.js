@@ -49,6 +49,7 @@ import { ICON_FS_EXPAND, ICON_FS_COMPRESS, ICON_BACK_CHEV, ICON_ED_NARRATIVE, IC
 import { routedGenText, aiModelSection, aiModelLabel } from "./ai-provider.js";
 import { mountImportsPage } from "./loreweaver-import.js";
 import { mountLorebooksPage } from "./lorebooks-page.js";
+import { mountHeroesPage } from "./heroes-page.js";
     import { routedGenImage, imageProviderControls, imageModelLabel } from "./image-provider.js";
 import { imageCloseBlocker } from "./image-provider.js";
 import { getAiConfig, saveAiConfig } from "./ai-provider.js";
@@ -1237,6 +1238,8 @@ const HOME_SECTIONS = [
     title: "Adventures", sub: "Your saved journeys — pick up where you left off." },
   // [rpge-patch 018] the import page moved from a floating overlay (loreweaver-import.html)
   // into the landing nav, right under Adventures. Its logic lives in loreweaver-import.js.
+  { id: "heroes", label: "Heroes", icon: "🦸", zone: "primary", accent: "--accent-ember", rgb: "200,120,90",
+    title: "Heroes", sub: "The saved-hero shelf — shared by every world." },
   { id: "lorebooks", label: "Lorebooks", icon: "📖", zone: "primary", accent: "--accent-arcane", rgb: "176,115,91",
     title: "Lorebooks", sub: "World Info books pulled from SillyTavern — pull changes, restore, unlink." },
   { id: "imports", label: "Import from Loreweaver", icon: "🧙", zone: "primary", accent: "--accent", rgb: "139,154,110",
@@ -1269,6 +1272,7 @@ const HN_ACTIONS = [
 const HOME_MOUNTS = {
   worlds: mountWorldsPage,
   adventures: mountAdventuresPage,
+  heroes: mountHeroesPage,
   lorebooks: mountLorebooksPage,
   imports: mountImportsPage,
   explore: mountExplorePage,
