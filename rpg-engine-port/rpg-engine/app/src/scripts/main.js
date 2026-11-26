@@ -14054,6 +14054,12 @@ async function saveAndMaybeMemory() {
 // this is only the handful of app primitives it cannot reach itself.
 window.mnoApp = {
   notify,
+  // Chat import (chat-import.js) builds a real session from imported messages and saves it through
+  // the same store the game uses, so an imported chat is an ordinary adventure from then on.
+  newSession,
+  // Getters, not values: both stores are created during boot, after this literal is evaluated.
+  get sessionStore() { return store; },
+  get heroStore() { return heroStore; },
   ConfirmPopup,
   TextPopup,
   pushBackClose,

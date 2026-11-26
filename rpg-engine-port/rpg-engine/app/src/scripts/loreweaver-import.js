@@ -1,3 +1,4 @@
+import { mountChatImport } from "./chat-import.js";
 // [rpge-patch 018] Import from Loreweaver — the landing page that used to be the floating
 // loreweaver-import.html overlay. Its logic is ported verbatim from that page (the shims
 // it needs — perchance-shim's window.root.kv, loreweaver-bridge.js — are already loaded in
@@ -45,6 +46,7 @@ export async function mountImportsPage(pane, ctx) {
         <button type="button" class="lwimp-tab" data-tab="personas">👤 Personas → Heroes</button>
         <button type="button" class="lwimp-tab" data-tab="cards">🎭 Cards → NPCs</button>
         <button type="button" class="lwimp-tab" data-tab="books">📖 World Info → Lore</button>
+        <button type="button" class="lwimp-tab" data-tab="chats">💬 Chats → Adventures</button>
       </div>
       <div class="lwimp-worldbox" id="lwimpWorldBox" hidden>
         <label class="lbl" for="lwimpTargetWorld">Target world</label>
@@ -70,6 +72,7 @@ export async function mountImportsPage(pane, ctx) {
         load.</p>
         <div id="lwimpChars">Loading characters…</div>
       </div>
+      <div class="lwimp-pane" data-pane="chats"></div>
       <div class="lwimp-pane" data-pane="books">
         <h2 class="lwimp-h" style="margin-top:6px">World Info → world lorebook</h2>
         <p>Copy a Loreweaver <b>World Info</b> book into the selected world's lorebook. Keywords
@@ -86,7 +89,7 @@ export async function mountImportsPage(pane, ctx) {
 
   // ---- tab strip: three import flows, one visible at a time (chrome only — logic below is
   // untouched; everything renders regardless of the active tab). The last tab is remembered.
-  const TABS = ["personas", "cards", "books"];
+  const TABS = ["personas", "cards", "books", "chats"];
   let curTab = "personas";
   try { curTab = localStorage.getItem("rpge.importTab") || "personas"; } catch (e) {}
   if (!TABS.includes(curTab)) curTab = "personas";
@@ -101,6 +104,7 @@ export async function mountImportsPage(pane, ctx) {
   }
   pane.querySelectorAll(".lwimp-tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   showTab(curTab);
+  void mountChatImport(pane.querySelector('[data-pane="chats"]'));
 
   // Small non-crypto content hash (fnv1a hex) — enough to notice a source change.
   function fnv1a(str) {
