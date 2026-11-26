@@ -148,6 +148,11 @@ export async function mountChatImport(pane) {
       await api().sessionStore.save(state);
       say("Imported " + state.messages.length + ' messages as "' + state.name + '". Open it from Adventures.', "ok");
       notify("Chat imported as an adventure.");
+      // Same in-place refresh as the other import tabs: the new adventure shows up without a reload.
+      const a = window.mnoApp || {};
+      for (const fn of ["refreshLanding", "repaintWorldsPage", "refreshUserPage"]) {
+        try { if (typeof a[fn] === "function") a[fn](); } catch (e) {}
+      }
     } catch (e) {
       say("Import failed: " + (e && e.message || e), "bad");
     } finally {

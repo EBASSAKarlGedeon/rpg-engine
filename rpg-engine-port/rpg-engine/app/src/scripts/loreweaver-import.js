@@ -87,6 +87,15 @@ export async function mountImportsPage(pane, ctx) {
   const $ = (id) => pane.querySelector("#" + id);
   const say = (t, cls) => { const m = $("lwimpMsg"); m.textContent = t; m.className = cls || ""; };
 
+  // Every engine-initiated import changes lists the game may already be showing (landing counts,
+  // the worlds grid, the hero shelf, adventures). Repaint them in place — no reload, no lost state.
+  function afterImport() {
+    const a = window.mnoApp || {};
+    for (const fn of ["refreshLanding", "repaintWorldsPage", "refreshUserPage", "refreshAddedWorlds"]) {
+      try { if (typeof a[fn] === "function") a[fn](); } catch (e) { /* a page that isn't mounted may not refresh */ }
+    }
+  }
+
   // ---- tab strip: three import flows, one visible at a time (chrome only — logic below is
   // untouched; everything renders regardless of the active tab). The last tab is remembered.
   const TABS = ["personas", "cards", "books", "chats"];
@@ -547,6 +556,7 @@ export async function mountImportsPage(pane, ctx) {
             say(r.created ? "Imported \u201c" + esc(p.name) + "\u201d as a saved hero — Load it from the hero library in the game."
                           : "Updated the linked hero \u201c" + esc(p.name) + "\u201d.", "ok");
             await renderPersonas();
+            afterImport();
           } catch (e) {
             say("Import failed: " + (e && e.message || e), "bad");
             this.disabled = false; this.textContent = linked ? "Update" : "Import as hero";
@@ -687,6 +697,7 @@ export async function mountImportsPage(pane, ctx) {
                                      : "Added \u201c" + esc(r.name) + "\u201d as an NPC.")
                         : "Updated the linked imports (" + r.count + ").", "ok");
           await renderChars();
+          afterImport();
         } catch (e) {
           say("Import failed: " + (e && e.message || e), "bad");
           this.disabled = false; this.textContent = btn;
@@ -761,6 +772,7 @@ export async function mountImportsPage(pane, ctx) {
           say(r.updated ? "Updated the imported lorebook entries (" + r.count + ")."
                         : "Imported " + r.count + " lore entries.", "ok");
           await renderBooks();
+          afterImport();
         } catch (e) {
           say("Import failed: " + (e && e.message || e), "bad");
           this.disabled = false; this.textContent = btn;
