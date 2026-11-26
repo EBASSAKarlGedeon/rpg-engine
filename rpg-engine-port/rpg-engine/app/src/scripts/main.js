@@ -48,6 +48,7 @@ import { searchControl, searchBar, switchEl, closeSearchPop, showNsfw, setShowNs
 import { ICON_FS_EXPAND, ICON_FS_COMPRESS, ICON_BACK_CHEV, ICON_ED_NARRATIVE, ICON_ED_TRACKERS, ICON_ED_NPC, ICON_IMPORT, ICON_EXPORT, ICON_DOWNLOAD, ICON_HEART, ICON_COMMENT, ICON_NOTE_DOC, ICON_OVERVIEW, ICON_INFO, ICON_FOLDER, ICON_FOLDER_OPEN, ICON_MANAGE } from "./icons.js";
 import { routedGenText, aiModelSection, aiModelLabel } from "./ai-provider.js";
 import { mountImportsPage } from "./loreweaver-import.js";
+import { mountLorebooksPage } from "./lorebooks-page.js";
     import { routedGenImage, imageProviderControls, imageModelLabel } from "./image-provider.js";
 import { imageCloseBlocker } from "./image-provider.js";
 import { getAiConfig, saveAiConfig } from "./ai-provider.js";
@@ -1236,6 +1237,8 @@ const HOME_SECTIONS = [
     title: "Adventures", sub: "Your saved journeys — pick up where you left off." },
   // [rpge-patch 018] the import page moved from a floating overlay (loreweaver-import.html)
   // into the landing nav, right under Adventures. Its logic lives in loreweaver-import.js.
+  { id: "lorebooks", label: "Lorebooks", icon: "📖", zone: "primary", accent: "--accent-arcane", rgb: "176,115,91",
+    title: "Lorebooks", sub: "World Info books pulled from SillyTavern — pull changes, restore, unlink." },
   { id: "imports", label: "Import from Loreweaver", icon: "🧙", zone: "primary", accent: "--accent", rgb: "139,154,110",
     title: "Import from Loreweaver", sub: "Bring personas, characters and lore into the game." },
   { id: "explore", label: "Explore", iconImg: "images/icon-explore.png", zone: "primary", accent: "--accent-arcane", rgb: "176,115,91",
@@ -1266,6 +1269,7 @@ const HN_ACTIONS = [
 const HOME_MOUNTS = {
   worlds: mountWorldsPage,
   adventures: mountAdventuresPage,
+  lorebooks: mountLorebooksPage,
   imports: mountImportsPage,
   explore: mountExplorePage,
   user: mountUserPage

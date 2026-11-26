@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "Browser ES modules; this file only tells Node how to read them for tests."
+}
