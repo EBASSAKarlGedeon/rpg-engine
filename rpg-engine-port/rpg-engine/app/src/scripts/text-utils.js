@@ -16,7 +16,9 @@ export function heroNameOf(state) {
 // Resolve `{{user}}` in `text` to `heroName`. Idempotent, and blank-safe (null/undefined → "").
 export function subUser(text, heroName) {
   const name = String(heroName || "").trim() || "the hero";
-  return String(text == null ? "" : text).split(USER_PLACEHOLDER).join(name);
+  // Case/space-insensitive like ST's macro engine: world prose may write {{User}} or {{ USER }}.
+  // The callback keeps a name containing "$&" literal instead of treating it as a replace token.
+  return String(text == null ? "" : text).replace(/\{\{\s*user\s*\}\}/gi, () => name);
 }
 
 // Placeholder-only profile text counts as empty: blank, dash/dot-only ("—", "-", "…"), or an

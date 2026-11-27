@@ -5,7 +5,7 @@ import { buildNpcTrackerContext, buildNpcTrackerRulesContext, extractNpcTrackers
 import { buildStatsContext } from "./stats.js";
 import { effectiveStats, actionsContext, ACTION_GAIN_RULE, parseActionStrips } from "./actions.js";
 import { formatDistance, compassDir, normalizeLoc, mapScale } from "./map-system.js";
-import { loreForTurn, LORE_FEED_CAP, LORE_FEED_MAX_CHARS, DEFAULT_TRIGGER_WINDOW_TURNS, STOPWORDS, nameHit } from "./lorebook.js";
+import { selectLoreForTurn, renderLoreEntry, renderLoreInsertion, loreInsertionIndex, LORE_FEED_CAP, LORE_FEED_MAX_CHARS, DEFAULT_TRIGGER_WINDOW_TURNS, STOPWORDS, nameHit } from "./lorebook.js";
 import { memoriesForTurn, MEMORY_FEED_CAP, MEMORY_TOPICAL_ACTIVE_CAP, MEMORY_TOPICAL_OPEN_CAP, MEMORY_NAME_FEED_CAP, MEMORY_TRIGGER_WINDOW_TURNS, ownerLabel } from "./memory-system.js";
 import { renderHistory } from "./memory-history.js"; // [rpge-patch 009]
 import { rank as bm25Rank, tokenize as bm25Tokenize } from "./bm25.js";
@@ -675,10 +675,10 @@ export class RPEngine {
   // [rpge-patch 022] Assemble the loaded preset for THIS turn: macro context is fresh (vars,
   // date/rolls), user = the hero. A broken preset never breaks the turn — it degrades to "no
   // stack" with a console warn, so one bad template can't take down play.
-  presetAssemble(hero) {
+  presetAssemble(hero, vars) {
     if (!this.preset) return { inFlow: "", injections: [] };
     try {
-      return assemblePresetPrompt(this.preset, { user: hero, char: "", now: new Date() });
+      return assemblePresetPrompt(this.preset, { user: hero, char: "Narrator", now: new Date(), vars });
     } catch (e) {
       console.warn("[rpge] preset assembly failed — playing this turn without the stack:", e);
       return { inFlow: "", injections: [] };
@@ -807,7 +807,14 @@ export class RPEngine {
     // macro-expanded fresh this turn ({{time}}, {{roll}}, setvar/getvar templates). Rides the
     // STABLE cluster too (a preset's blocks are static per preset), so the prefix cache stays
     // banked. With no preset loaded this is silent — byte-identical to pre-022 prompts.
-    const presetOut = this.presetAssemble(hero);
+    // Preset {{setvar}} state is per-chat (ST keeps it in chat_metadata), so feed the session's
+    // stored values back in and write out what this turn set. __pick is a one-turn cache: persisting
+    // it would freeze a {{pick}} choice for the rest of the adventure.
+    const presetVars = new Map(Object.entries(state.presetVars && typeof state.presetVars === "object" ? state.presetVars : {}));
+    const presetOut = this.presetAssemble(hero, presetVars);
+    const persistedVars = {};
+    for (const [k, v] of presetVars) if (!String(k).startsWith("__pick:")) persistedVars[k] = v;
+    state.presetVars = persistedVars;
     if (presetOut.inFlow) parts.push("PRESET DIRECTIVES (instructions from the author's loaded prompt preset — binding):\n" + presetOut.inFlow);
     // The current location tracker value (used by the lore selector and the SURROUNDINGS section).
     const curLocTxt = locationValue(this.trackerDefs, getCurrentTrackers(state, this.trackerDefs));
@@ -846,20 +853,28 @@ export class RPEngine {
 
     // The lorebook: only the entries relevant to the current scene are fed — "always"
     // entries plus the BM25 top-N keyword entries for the recent chat, the latest action,
-    // and the current location. Each entry is tagged with its [type]. See loreForTurn.
+    // and the current location. Each entry is tagged with its [type]. See selectLoreForTurn.
     // It sits here — world facts, then the current situation below — rather than with the
     // static premise blocks: the selected subset changes almost every turn, so it belongs
     // in the volatile cluster, flowing general → current → episodic (lore → situation →
     // threads → memories). The small stable sections below it (~120 tokens for situation +
     // threads) recompute when the lore selection changes; deliberate.
-   if (this.loreEntries.length) {
-     const lore = loreForTurn(this.loreEntries, {
-       chatTurns: this.recentChatTurns(history),
-       actionText,
+    // Entries authored with a role + depth (World Info at-depth insertion) are held aside and
+    // placed INSIDE the transcript below, at the message boundary their depth names.
+    let positionedLore = [];
+    if (this.loreEntries.length) {
+      const selection = selectLoreForTurn(this.loreEntries, {
+        chatTurns: this.recentChatTurns(history),
+        actionText,
         location: curLocTxt,
         feedCap: LORE_FEED_CAP * capMultiplier,
-        maxChars: LORE_FEED_MAX_CHARS * capMultiplier
+        maxChars: LORE_FEED_MAX_CHARS * capMultiplier,
+        // Stable per turn: rebuilding the prompt must not reroll the chance and swap canon.
+        seed: String(state.id || "") + ":" + String(state.turn || 0)
       }, opts.hybrid || null);
+      const selected = [...selection.always, ...selection.chosen];
+      positionedLore = selected.filter((e) => e && e.injection);
+      const lore = selected.filter((e) => !(e && e.injection)).map(renderLoreEntry).filter(Boolean).join("\n\n");
       if (lore) parts.push("WORLD LORE (canon — the entries below were selected as relevant to the current scene; each is tagged [type]; treat them as ground truth and never contradict them):\n" + lore);
     }
 
@@ -1272,7 +1287,27 @@ export class RPEngine {
       // than in fmt() so BM25 retrieval queries (recentChatTurns) stay cue-free. Role "cue" is
       // inert for stage-2 fitting (only "narrator" lines cut, only action/direct count as anchors).
       const lines = [], roles = [];
+      // At-depth lore insertions, grouped by message boundary. Depth 0 lands after the newest
+      // message; depth N lands before the Nth message from the end (clamped at the window top).
+      const loreInserts = new Map();
+      for (const e of positionedLore) {
+        const at = loreInsertionIndex(e, storyHistory.length);
+        if (!loreInserts.has(at)) loreInserts.set(at, []);
+        loreInserts.get(at).push(e);
+      }
+      for (const arr of loreInserts.values()) {
+        arr.sort((a, b) => (Number(b.order) || 0) - (Number(a.order) || 0));
+      }
+      const flushLore = (at) => {
+        const arr = loreInserts.get(at);
+        if (!arr) return;
+        for (const e of arr) {
+          const line = renderLoreInsertion(e);
+          if (line) { lines.push(line); roles.push("lore"); }
+        }
+      };
       for (let i = 0; i < storyHistory.length; i++) {
+        flushLore(i);
         lines.push(rawLines[i]);
         roles.push(rawRoles[i]);
         if ((rawRoles[i] === "action" || rawRoles[i] === "direct") && i + 1 < storyHistory.length) {
@@ -1280,6 +1315,7 @@ export class RPEngine {
           if (nr !== "action" && nr !== "direct") { lines.push("REPLY:"); roles.push("cue"); }
         }
       }
+      flushLore(storyHistory.length);
       transcript = {
         lines,
         roles,
@@ -1288,6 +1324,15 @@ export class RPEngine {
       };
       transcriptIdx = parts.length;
       parts.push("");
+    }
+
+    // No transcript yet (opening turn): there is no message boundary to insert at, so keep the
+    // authored depth/role labels in one section in priority order instead of losing them.
+    if (positionedLore.length && !storyHistory.length) {
+      const lines = positionedLore.slice()
+        .sort((a, b) => (Number(b.order) || 0) - (Number(a.order) || 0))
+        .map(renderLoreInsertion).filter(Boolean);
+      if (lines.length) parts.push("WORLD LORE — AT-DEPTH INSERTIONS (canon; the adventure has no transcript yet, so these are shown in authored priority order):\n" + lines.join("\n"));
     }
 
     if (kind === "travel") {

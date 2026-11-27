@@ -1,4 +1,15 @@
 import { mountChatImport } from "./chat-import.js";
+import { MAX_SAVED_HEROES } from "./storage.js";
+import {
+  buildCardLore,
+  cardImportHash,
+  resolveCharMacro,
+  npcFromCard,
+  loreFromWorldInfoEntry,
+  importedTitleSet,
+  importedContentHashes,
+  stripPreviousImport,
+} from "./loreweaver-import-map.js";
 // [rpge-patch 018] Import from Loreweaver — the landing page that used to be the floating
 // loreweaver-import.html overlay. Its logic is ported verbatim from that page (the shims
 // it needs — perchance-shim's window.root.kv, loreweaver-bridge.js — are already loaded in
@@ -170,7 +181,12 @@ export async function mountImportsPage(pane, ctx) {
   }
 
   function personaAvatarUrl(id) { return "/User%20Avatars/" + encodeURIComponent(id); }
+  // List tiles only. The thumbnail endpoint renders 96x144 by default (config
+  // thumbnails.dimensions.avatar), which is fine for a 52px row but destroys stored art — importing
+  // an NPC avatar or a world cover from it is what made both look pixelated.
   function cardThumbUrl(avatar) { return "/thumbnail?type=avatar&file=" + encodeURIComponent(avatar); }
+  // The card's own file at whatever resolution it was imported with. Stored art always comes from here.
+  function cardImageUrl(avatar) { return "/characters/" + encodeURIComponent(avatar); }
 
   // ---- linked-snapshot registry (kv.rpg "lwImports") ----
   const REG_KEY = "lwImports";
@@ -194,9 +210,16 @@ export async function mountImportsPage(pane, ctx) {
     return Array.isArray(v) ? v : [];
   }
   async function saveHeroList(list) {
-    const rpg = window.root.kv.rpg;
-    while (list.length > 40) list.shift(); // same cap as the engine's HeroStore
-    await rpg.set("savedHeroes", list);
+    // Same rule as HeroStore.save: never evict the oldest hero to make room. This page writes
+    // savedHeroes directly, so it needs the cap too — `shift()` here silently deleted a hero when
+    // a 41st persona was imported.
+    if (list.length > MAX_SAVED_HEROES) {
+      const err = new Error("The saved-hero library is full (" + MAX_SAVED_HEROES + "). Delete a slot in Saved Heroes first - nothing was overwritten.");
+      err.code = "hero-limit";
+      err.limit = MAX_SAVED_HEROES;
+      throw err;
+    }
+    await window.root.kv.rpg.set("savedHeroes", list);
   }
   function findLinkedHero(list, srcId) {
     return list.find(function (h) { return h && h.lwSource && h.lwSource.type === "persona" && h.lwSource.id === srcId; }) || null;
@@ -226,45 +249,21 @@ export async function mountImportsPage(pane, ctx) {
   }
 
   // ---- character cards -> world NPCs / standalone worlds ----
-  function cardHash(c) { return fnv1a([c.description, c.personality, c.scenario].join("\u0000")); }
+  // Covers greetings/tags/embedded book too, so a lorebook edit shows as "source changed"
+  // (the old description/personality/scenario-only hash never did).
+  const cardHash = cardImportHash;
 
-  function bookHash(b) { return fnv1a([b.file_id, b.name].join("\u0000")); }
+  // The list endpoint returns only file_id/name/extensions — never the entries — so hashing those
+  // two fields marked every edited book "up to date" forever. Content is fetched for linked books
+  // once per list render and folded into the hash; the stored hash uses the same entries payload.
+  function bookHash(b, data) {
+    const entries = data && data.entries ? data.entries : null;
+    return fnv1a([b.file_id, b.name, entries ? JSON.stringify(entries) : ""].join("\u0000"));
+  }
+  function linkedBookHash(b) { return b.__hash || bookHash(b); }
 
   function buildNpcFromCard(card) {
-    const persona = [card.description, card.personality]
-      .map(function (s) { return String(s || "").trim(); }).filter(Boolean).join("\n\n");
-    return {
-      name: String(card.name || "").trim(),
-      age: "", gender: "", race: "", appearance: "", job: "",
-      persona: persona,
-      secrets: "",
-      extra: String(card.scenario || "").trim(),
-      avatar: card.avatar ? cardThumbUrl(card.avatar) : ""
-    };
-  }
-
-  function buildCardLore(card) {
-    const lore = [];
-    const titles = [];
-    const book = (card.data && card.data.character_book) || card.character_book || null;
-    const entries = book && Array.isArray(book.entries) ? book.entries : [];
-    for (const e of entries) {
-      if (!e || e.enabled === false) continue;
-      const content = String(e.content || "").trim();
-      if (!content) continue;
-      const kw = [].concat(Array.isArray(e.keys) ? e.keys : [], Array.isArray(e.key) ? e.key : [], Array.isArray(e.secondary_keys) ? e.secondary_keys : [])
-        .map(function (s) { return String(s || "").trim(); }).filter(Boolean);
-      const title = String(e.comment || "").trim() || (kw[0] ? kw[0] : "");
-      lore.push({
-        title: title,
-        type: "character",
-        activation: e.constant === true || String(e.constant) === "true" ? "always" : (kw.length ? "keywords" : "always"),
-        keywords: kw,
-        content: content
-      });
-      titles.push(title);
-    }
-    return { lore: lore, titles: titles };
+    return npcFromCard(card, card.avatar ? cardImageUrl(card.avatar) : "");
   }
 
   function slugifyWorldName(name) {
@@ -276,41 +275,85 @@ export async function mountImportsPage(pane, ctx) {
   async function freshWorldId(name, idx) {
     const base = slugifyWorldName(name);
     const taken = new Set(idx.map(function (w) { return w.id; }));
-    if (!taken.has(base)) return base;
-    for (let n = 2; ; n++) {
-      const tail = "-" + n;
+    for (let n = 1; ; n++) {
+      const tail = n === 1 ? "" : "-" + n;
       const cand = (base.length + tail.length > 40) ? base.slice(0, 40 - tail.length) + tail : base + tail;
-      if (!taken.has(cand)) return cand;
+      if (taken.has(cand)) continue;
+      // The index is a cache: a failed/stale read must not let a new world overwrite the blob
+      // already stored under this id. Check the world itself before reusing a slug.
+      let exists = false;
+      try { exists = !!(await window.root.kv.worlds.get(cand)); } catch (e) { exists = false; }
+      if (!exists) return cand;
     }
   }
 
   async function refreshWorldImport(card, w) {
     const raw = await loadWorldRaw(w.worldId);
-    if (!raw) return;
+    if (!raw) return false;
     const fresh = buildCardLore(card);
     const wf = cardWorldFields(card);
+    // Legacy imports wrote the card description as a "Rules" law entry in addition to
+    // worldDescription. Only that legacy shape (no tracked titles/hashes) is cleaned up: once a
+    // link has tracked entries, a "Rules" entry may be something the player wrote and must stay.
+    const legacyLink = !Array.isArray(w.titles) && !Array.isArray(w.hashes);
     raw.lorebook = (Array.isArray(raw.lorebook) ? raw.lorebook : []).filter(function (e) {
-      return !(e && typeof e === "object" && e.type === "law" && e.activation === "always"
+      return !(legacyLink && e && typeof e === "object" && e.type === "law" && e.activation === "always"
         && String(e.title || "").trim().toLowerCase() === "rules" && (!e.keywords || !e.keywords.length));
     });
-    const titles = new Set((w.titles || []).map(function (t) { return String(t || "").toLowerCase(); }));
-    raw.lorebook = raw.lorebook.filter(function (e) {
-      const t = e && typeof e === "object" ? String(e.title || "").toLowerCase() : null;
-      return t === null || !titles.has(t);
-    });
+    // Only this card's previous entries are removed. Untitled entries are matched by content
+    // hash, never by "" (which used to delete every hand-written untitled entry in the world).
+    raw.lorebook = stripPreviousImport(
+      raw.lorebook,
+      importedTitleSet(w.titles),
+      new Set(Array.isArray(w.hashes) ? w.hashes : []),
+      fresh.lore,
+    );
     raw.lorebook.push(...fresh.lore);
     if (wf.story) raw.worldDescription = wf.story;
     if (wf.scenario) raw.scenario = wf.scenario;
-    if (wf.vibe) raw.narrativeVibe = (String(raw.narrativeVibe || "").trim())
-      ? (String(raw.narrativeVibe).trim() + "\n\n---\n\n" + wf.vibe) : wf.vibe;
-    if (wf.tags.length) raw.meta.tags = wf.tags;
+    // Replace the previously imported vibe instead of appending it again: the old code grew
+    // narrativeVibe by one "---" segment on every refresh.
+    const prevVibe = String(w.vibe || "").trim();
+    let vibeBase = String(raw.narrativeVibe || "").trim();
+    if (prevVibe) {
+      if (vibeBase === prevVibe) vibeBase = "";
+      else {
+        const tail = "\n\n---\n\n" + prevVibe;
+        if (vibeBase.endsWith(tail)) vibeBase = vibeBase.slice(0, -tail.length).trim();
+      }
+    }
+    if (wf.vibe) {
+      // Legacy link records have no w.vibe; never append a copy that is already present.
+      if (!prevVibe && vibeBase.includes(wf.vibe)) {
+        raw.narrativeVibe = vibeBase;
+      } else {
+        raw.narrativeVibe = vibeBase ? vibeBase + "\n\n---\n\n" + wf.vibe : wf.vibe;
+      }
+      w.vibe = wf.vibe;
+    } else {
+      raw.narrativeVibe = vibeBase;
+      w.vibe = "";
+    }
+    if (wf.tags.length) {
+      // Union, not replace: tags the player added to the world must survive a source refresh.
+      const tags = Array.isArray(raw.meta.tags) ? raw.meta.tags.slice() : [];
+      const seen = new Set(tags.map(function (t) { return String(t).toLowerCase(); }));
+      for (const t of wf.tags) if (!seen.has(String(t).toLowerCase())) { tags.push(t); seen.add(String(t).toLowerCase()); }
+      raw.meta.tags = tags;
+    }
     if (wf.nsfw) raw.meta.nsfw = true;
     if (wf.authorNotes) raw.meta.authorNotes = wf.authorNotes;
+    const hasTrackedStarts = Array.isArray(w.startIds);
     const prevStartIds = new Set((w.startIds || []).map(String));
     const freshIds = new Set(wf.starts.map(function (s) { return s.id; }));
+    const freshTexts = new Set(wf.starts.map(function (s) { return String(s.text || "").trim(); }));
     const starts = (Array.isArray(raw.starts) ? raw.starts : [])
       .filter(function (s) { return s && typeof s === "object" && s.custom !== true; })
-      .filter(function (s) { return !(s.id && (prevStartIds.has(String(s.id)) || freshIds.has(String(s.id)))); });
+      .filter(function (s) {
+        if (s.id && (prevStartIds.has(String(s.id)) || freshIds.has(String(s.id)))) return false;
+        // Legacy links did not track startIds: an exact greeting match is the only marker.
+        return !(!hasTrackedStarts && freshTexts.has(String(s.text || "").trim()));
+      });
     if (!Array.isArray(raw.starts) && String(raw.start || "").trim()) {
       starts.push({ id: "start", title: "", description: "", text: String(raw.start).trim(), mode: raw.startMode === "verbatim" ? "verbatim" : "prompt" });
     }
@@ -321,6 +364,32 @@ export async function mountImportsPage(pane, ctx) {
     w.startIds = wf.starts.map(function (s) { return s.id; });
     await window.root.kv.worlds.set(w.worldId, raw);
     w.titles = fresh.titles;
+    w.hashes = [...importedContentHashes(fresh.lore)];
+    return true;
+  }
+
+  // Re-read a card and update the worlds it was imported AS, without touching any world's NPC
+  // list. Before this existed the only "update" path was "add as NPC", which silently inserted
+  // the card into its own world as a duplicate character.
+  async function refreshCardWorlds(card) {
+    const reg = await regRead();
+    const prev = reg.cards[card.avatar];
+    if (!prev) return { worlds: 0 };
+    const links = (prev.worlds || []).filter(function (w) { return w && w.asWorld; });
+    let live = 0;
+    const dead = [];
+    for (const w of links) {
+      if (await refreshWorldImport(card, w)) live++;
+      else dead.push(w);
+    }
+    // A world deleted in the game must drop out of the link record too, or the row keeps
+    // advertising a tombstone and every refresh keeps re-reading it.
+    if (dead.length) prev.worlds = (prev.worlds || []).filter(function (w) { return dead.indexOf(w) < 0; });
+    if (links.length) {
+      await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: prev.worlds });
+      notifyWorldsChanged();
+    }
+    return { worlds: live };
   }
 
   async function importCardToWorld(card, worldId) {
@@ -349,6 +418,12 @@ export async function mountImportsPage(pane, ctx) {
     }
     const worlds = prev ? prev.worlds || [] : [];
     const inThisWorld = worlds.some(function (w) { return !w.asWorld && w.worldId === worldId; });
+    // Target is this card's own imported world: the refresh above is the whole job. Adding the
+    // card as an NPC here would duplicate the protagonist inside their own world.
+    if (worlds.some(function (w) { return w.asWorld && w.worldId === worldId; })) {
+      await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: worlds });
+      return { created: false, updated: true, count: 1, name: npc.name };
+    }
     if (!inThisWorld) {
       raw.npcs = Array.isArray(raw.npcs) ? raw.npcs : [];
       let targetName = npc.name;
@@ -368,12 +443,13 @@ export async function mountImportsPage(pane, ctx) {
   }
 
   function cardWorldFields(card) {
+    const charName = String(card.name || "").trim();
     const story = [card.description, card.personality]
-      .map(function (s) { return String(s || "").trim(); }).filter(Boolean).join("\n\n");
+      .map(function (s) { return resolveCharMacro(String(s || "").trim(), charName); }).filter(Boolean).join("\n\n");
     const alt = (Array.isArray(card.alternate_greetings) ? card.alternate_greetings : null)
       || ((card.data && Array.isArray(card.data.alternate_greetings)) ? card.data.alternate_greetings : []) || [];
     const greetings = [card.first_mes].concat(alt)
-      .map(function (s) { return String(s || "").trim(); }).filter(Boolean);
+      .map(function (s) { return resolveCharMacro(String(s || "").trim(), charName); }).filter(Boolean);
     const starts = greetings.map(function (text, i) {
       return i === 0
         ? { id: "start", title: "", description: "", text: text, mode: "verbatim" }
@@ -389,11 +465,11 @@ export async function mountImportsPage(pane, ctx) {
       if (low === "remix" || seen.has(low)) continue;
       seen.add(low); tags.push(t);
     }
-    const authorNotes = String(card.creator_notes || (card.data && card.data.creator_notes) || card.creatorcomment || "").trim();
+    const authorNotes = resolveCharMacro(String(card.creator_notes || (card.data && card.data.creator_notes) || card.creatorcomment || "").trim(), charName);
     return {
       story: story,
-      scenario: String(card.scenario || "").trim(),
-      vibe: String(card.system_prompt || (card.data && card.data.system_prompt) || "").trim(),
+      scenario: resolveCharMacro(String(card.scenario || "").trim(), charName),
+      vibe: resolveCharMacro(String(card.system_prompt || (card.data && card.data.system_prompt) || "").trim(), charName),
       starts: starts,
       tags: tags.slice(0, 12),
       nsfw: nsfw,
@@ -412,7 +488,9 @@ export async function mountImportsPage(pane, ctx) {
     if (!Array.isArray(idx)) idx = [];
     const id = await freshWorldId(name, idx);
     const now = new Date().toISOString();
-    const cover = card.avatar ? await toCoverDataUrl(cardThumbUrl(card.avatar)) : "";
+    let cover = card.avatar ? await toCoverDataUrl(cardImageUrl(card.avatar)) : "";
+    // The full card file is the source; the thumbnail only stands in if that file cannot be read.
+    if (card.avatar && !cover) cover = await toCoverDataUrl(cardThumbUrl(card.avatar));
     const world = {
       format: "mno-world", version: 1,
       meta: { id: id, name: name, description: "", author: "", authorId: "", tags: wf.tags, nsfw: wf.nsfw, commentsOff: false, cover: cover, authorNotes: wf.authorNotes, createdAt: now, updatedAt: now },
@@ -436,7 +514,7 @@ export async function mountImportsPage(pane, ctx) {
     const reg = await regRead();
     const prev = reg.cards[card.avatar];
     const recs = prev ? (prev.worlds || []) : [];
-    recs.push({ worldId: id, asWorld: true, titles: fresh.titles });
+    recs.push({ worldId: id, asWorld: true, titles: fresh.titles, hashes: [...importedContentHashes(fresh.lore)], vibe: wf.vibe });
     await regRecord(reg, "cards", card.avatar, { hash: cardHash(card), at: Date.now(), worlds: recs });
     notifyWorldsChanged();
     return { created: true, worldId: id, name: name };
@@ -450,32 +528,17 @@ export async function mountImportsPage(pane, ctx) {
   }
 
   // ---- World Info -> world lorebook ----
-  function wiEntryToLore(e) {
-    const content = String(e.content || "").trim();
-    if (!content) return null;
-    const kw = [].concat(Array.isArray(e.key) ? e.key : [], Array.isArray(e.keysecondary) ? e.keysecondary : []);
-    const entry = {
-      title: String(e.comment || "").trim(),
-      type: "lore",
-      activation: e.constant === true ? "always" : "keywords",
-      keywords: kw.map(function (s) { return String(s || "").trim(); }).filter(Boolean),
-      content: content
-    };
-    if (entry.activation === "keywords" && !entry.keywords.length) entry.activation = "always";
-    return entry;
-  }
-
   async function importBookToWorld(book, worldId) {
     const data = await window.LoreweaverBridge.api("/api/worldinfo/get", { name: book.file_id });
     const rawEntries = (data && data.entries) || {};
     const lore = [];
     for (const uid of Object.keys(rawEntries)) {
-      const e = rawEntries[uid];
-      if (!e || e.disable === true || String(e.disable) === "true") continue;
-      const l = wiEntryToLore(e);
+      const l = loreFromWorldInfoEntry(rawEntries[uid]);
       if (l) lore.push(l);
     }
     if (!lore.length) throw new Error("book has no enabled entries with content");
+    const freshTitles = lore.map(function (l) { return l.title; }).filter(Boolean);
+    const freshHashes = [...importedContentHashes(lore)];
     const raw = await loadWorldRaw(worldId);
     if (!raw) throw new Error("world not found");
     if (typeof raw.lorebook === "string" && raw.lorebook.trim()) {
@@ -488,26 +551,25 @@ export async function mountImportsPage(pane, ctx) {
       for (const w of prev.worlds) {
         const wr = await loadWorldRaw(w.worldId);
         if (!wr) continue;
-        wr.lorebook = Array.isArray(wr.lorebook) ? wr.lorebook : [];
-        const titles = new Set(w.titles.map(function (t) { return String(t || "").toLowerCase(); }));
-        wr.lorebook = wr.lorebook.filter(function (e) {
-          const t = e && typeof e === "object" ? String(e.title || "").toLowerCase() : null;
-          return t === null || !titles.has(t);
-        });
+        wr.lorebook = stripPreviousImport(
+          Array.isArray(wr.lorebook) ? wr.lorebook : [],
+          importedTitleSet(w.titles),
+          new Set(Array.isArray(w.hashes) ? w.hashes : []),
+          lore,
+        );
         wr.lorebook.push(...lore);
         await window.root.kv.worlds.set(w.worldId, wr);
+        w.titles = freshTitles;
+        w.hashes = freshHashes;
       }
-      const worlds = prev.worlds.map(function (w) {
-        return Object.assign({}, w, { titles: lore.map(function (l) { return l.title; }) });
-      });
-      await regRecord(reg, "books", book.file_id, { hash: bookHash(book), at: Date.now(), worlds: worlds });
+      await regRecord(reg, "books", book.file_id, { hash: bookHash(book, data), at: Date.now(), worlds: prev.worlds });
       return { updated: true, count: lore.length };
     }
     raw.lorebook.push(...lore);
     await window.root.kv.worlds.set(worldId, raw);
     const worlds = prev ? prev.worlds || [] : [];
-    worlds.push({ worldId: worldId, titles: lore.map(function (l) { return l.title; }) });
-    await regRecord(reg, "books", book.file_id, { hash: bookHash(book), at: Date.now(), worlds: worlds });
+    worlds.push({ worldId: worldId, titles: freshTitles, hashes: freshHashes });
+    await regRecord(reg, "books", book.file_id, { hash: bookHash(book, data), at: Date.now(), worlds: worlds });
     return { created: true, count: lore.length };
   }
 
@@ -680,12 +742,15 @@ export async function mountImportsPage(pane, ctx) {
         st = { cls: "", text: "not imported" };
         btn = "Add as NPC";
       }
+      const refreshBtn = asWorld.length
+        ? '<button class="secondary" title="Re-read this card and update the world it was imported as — without adding an NPC here.">\u21bb Refresh world</button>'
+        : "";
       const div = row(
         '<img alt="" src="' + cardThumbUrl(c.avatar) + '" onerror="this.style.visibility=\'hidden\'">' +
         '<div class="pmain"><span class="pname">' + esc(c.name || "(unnamed)") + "</span>" +
         '<div class="pdesc">' + esc(String(c.description || "").slice(0, 140)) + "</div>" +
         '<div class="pstatus ' + st.cls + '">' + st.text + "</div></div>" +
-        '<div class="pbtns"><button>' + btn + "</button><button class=\"secondary\" title=\"Creates a NEW game world from this card: the description as always-on rules, its embedded lorebook as the cast.\">Add as world</button></div>");
+        '<div class="pbtns"><button>' + btn + "</button><button class=\"secondary\" title=\"Creates a NEW game world from this card: the description as always-on rules, its embedded lorebook as the cast.\">" + (asWorld.length ? "Add another world" : "Add as world") + "</button>" + refreshBtn + "</div>");
       const buttons = div.querySelectorAll("button");
       buttons[0].onclick = async function () {
         this.disabled = true; this.textContent = "…";
@@ -715,7 +780,22 @@ export async function mountImportsPage(pane, ctx) {
           await renderChars();
         } catch (e) {
           say("Import failed: " + (e && e.message || e), "bad");
-          this.disabled = false; this.textContent = "Add as world";
+          this.disabled = false; this.textContent = asWorld.length ? "Add another world" : "Add as world";
+        }
+      };
+      if (refreshBtn) buttons[2].onclick = async function () {
+        this.disabled = true; this.textContent = "…";
+        try {
+          const full = await window.LoreweaverBridge.api("/api/characters/get", { avatar_url: c.avatar });
+          const card = (full && typeof full === "object" && full.name !== undefined) ? full : c;
+          const r = await refreshCardWorlds(card);
+          say(r.worlds ? "Refreshed " + r.worlds + " imported world" + (r.worlds === 1 ? "" : "s") + " from \u201c" + esc(c.name) + "\u201d."
+                       : "This card is not linked to an imported world.", r.worlds ? "ok" : "bad");
+          await renderChars();
+          afterImport();
+        } catch (e) {
+          say("Refresh failed: " + (e && e.message || e), "bad");
+          this.disabled = false; this.textContent = "\u21bb Refresh world";
         }
       };
       box.appendChild(div);
@@ -733,6 +813,17 @@ export async function mountImportsPage(pane, ctx) {
       say("Could not load World Info: " + (e && e.message || e), "bad");
       return;
     }
+    // Only linked books need a content hash; fetch those in parallel and cache on the row object.
+    try {
+      const reg = await regRead();
+      await Promise.all(bookList.map(async function (b) {
+        if (!reg.books[b.file_id]) return;
+        try {
+          const d = await window.LoreweaverBridge.api("/api/worldinfo/get", { name: b.file_id });
+          b.__hash = bookHash(b, d);
+        } catch (e) { /* leave the fallback name hash; the row still works */ }
+      }));
+    } catch (e) {}
     await renderBooks();
   }
 
@@ -750,7 +841,7 @@ export async function mountImportsPage(pane, ctx) {
       const inWorld = linked && linked.worlds.some(function (w) { return w.worldId === worldId; });
       let st, btn;
       if (inWorld) {
-        st = linked.hash !== bookHash(b)
+        st = linked.hash !== linkedBookHash(b)
           ? { cls: "st-changed", text: "linked → lorebook in this world — source changed, update" }
           : { cls: "st-ok", text: "linked → lorebook in this world — up to date" };
         btn = "Update";

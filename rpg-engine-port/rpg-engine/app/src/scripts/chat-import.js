@@ -1,8 +1,10 @@
 // Chats tab — turn a SillyTavern chat into a continuable RPG Engine adventure.
 //
-// Single-character chats only. The world must already exist; the hero is matched by name in the
-// saved-hero library and created from the card's description when missing. Every message is kept, in
-// order, and only the ACTIVE swipe is read (SillyTavern keeps the visible text in `mes`).
+// Single-character chats only. The world must already exist; the hero is the PLAYER (taken from the
+// chat's user_name / first user message, persona from Loreweaver when one matches), never the AI
+// card - the card is the world's NPC side. Every message is kept, in order, and only the ACTIVE swipe
+// is read (SillyTavern keeps the visible text in `mes`). `{{char}}`/`{{user}}` are resolved here
+// because the engine has no `{{char}}` macro.
 //
 // The chat body comes from POST /api/chats/get with { avatar_url, file_name } — the server keys on
 // `file_name` WITHOUT the .jsonl extension (src/endpoints/chats.js:532); sending `ch_name` silently
@@ -12,6 +14,7 @@
 // inference are not performed yet (they need the opt-in checkbox UI and an LLM call).
 
 import { notify } from "./notify.js";
+import { chatPlayerName, chatMessagesToImport, chatTurnCount } from "./loreweaver-import-map.js";
 
 const bridge = () => window.LoreweaverBridge;
 const api = () => window.mnoApp;
@@ -35,8 +38,29 @@ async function listChats(avatar) {
 async function loadChat(avatar, fileName) {
   const name = String(fileName).replace(/\.jsonl$/, "");
   const r = await bridge().api("/api/chats/get", { avatar_url: avatar, file_name: name });
-  const msgs = Array.isArray(r) ? r : (r && (Array.isArray(r.chat) ? r.chat : (Array.isArray(r.messages) ? r.messages : [])));
-  return msgs.filter(function (m) { return m && typeof m.mes === "string" && m.mes.trim(); });
+  const all = Array.isArray(r) ? r : (r && (Array.isArray(r.chat) ? r.chat : (Array.isArray(r.messages) ? r.messages : [])));
+  const meta = all.find(function (m) {
+    return m && typeof m === "object" && m.mes === undefined && (m.user_name !== undefined || m.character_name !== undefined);
+  }) || null;
+  const msgs = all.filter(function (m) { return m && typeof m.mes === "string" && m.mes.trim(); });
+  return { msgs: msgs, meta: meta };
+}
+
+// The player's persona in Loreweaver, matched by name (exact, case-insensitive). No match means no
+// persona text - falling back to the card would make the player sound like the character.
+async function loreweaverPersona(name) {
+  try {
+    const lw = await bridge().getSettings();
+    const pu = (lw.parsed && lw.parsed.power_user) || {};
+    const names = pu.personas && typeof pu.personas === "object" ? pu.personas : {};
+    const descs = pu.persona_descriptions && typeof pu.persona_descriptions === "object" ? pu.persona_descriptions : {};
+    const id = Object.keys(names).find(function (k) {
+      return String(names[k] || "").trim().toLowerCase() === String(name || "").trim().toLowerCase();
+    });
+    return id && descs[id] ? String(descs[id].description || "") : "";
+  } catch (e) {
+    return "";
+  }
 }
 
 export async function mountChatImport(pane) {
@@ -47,8 +71,9 @@ export async function mountChatImport(pane) {
   pane.innerHTML = `
     <h2 class="lwimp-h" style="margin-top:6px">Chats → adventures</h2>
     <p>Pick a Loreweaver chat and a world; the engine writes a normal adventure from it, so it shows up
-    under <b>Adventures</b> and plays on from its last message. The hero is matched by name in the
-    saved-hero library (created from the card when missing). Nothing is written back to Loreweaver.</p>
+    under <b>Adventures</b> and plays on from its last message. The hero is the chat's <b>player</b>
+    (matched by name in the saved-hero library; persona taken from Loreweaver when one matches), not
+    the AI character. Nothing is written back to Loreweaver.</p>
     <label class="lbl" for="ciChar">Character</label>
     <select id="ciChar"><option value="">Loading characters…</option></select>
     <label class="lbl" for="ciChat">Chat</label>
@@ -107,21 +132,15 @@ export async function mountChatImport(pane) {
   chatSel.onchange = function () { go.disabled = !chatSel.value || !worldSel.value; };
   worldSel.onchange = function () { go.disabled = !chatSel.value || !worldSel.value; };
 
-  async function ensureHero(avatar, cardName) {
+  async function ensureHero(playerName) {
     const store = api().heroStore;
     const list = await store.list();
     const hit = list.find(function (h) {
-      return String(h.name || h.label || "").toLowerCase() === String(cardName).toLowerCase();
+      return String(h.name || h.label || "").trim().toLowerCase() === String(playerName).trim().toLowerCase();
     });
     if (hit) return hit;
-    let desc = "";
-    try {
-      const full = await bridge().api("/api/characters/get", { avatar_url: avatar });
-      desc = [full && full.description, full && full.personality].filter(Boolean).join("\n\n");
-    } catch (e) { /* a missing description only costs the persona text */ }
-    const hero = { name: cardName, label: cardName, persona: desc };
-    await store.save(hero, cardName);
-    return hero;
+    const hero = { name: playerName, label: playerName, persona: await loreweaverPersona(playerName) };
+    return store.save(hero, playerName);
   }
 
   go.onclick = async function () {
@@ -131,20 +150,24 @@ export async function mountChatImport(pane) {
     say("Reading the chat…", "info");
     try {
       const card = chars.find(function (c) { return c.avatar === avatar; }) || { name: avatar };
-      const msgs = await loadChat(avatar, fileName);
+      const loaded = await loadChat(avatar, fileName);
+      const msgs = loaded.msgs;
       if (!msgs.length) { say("That chat has no messages.", "bad"); return; }
-      const hero = await ensureHero(avatar, card.name);
+      const meta = loaded.meta;
+      const playerName = chatPlayerName(meta, msgs, card.name);
+      const hero = await ensureHero(playerName);
+      const charName = (meta && meta.character_name && String(meta.character_name).trim().toLowerCase() !== "unused")
+        ? String(meta.character_name).trim() : card.name;
       const world = await kv().worlds.get(worldId);
       const state = api().newSession(undefined, worldId, null);
       state.worldName = (world && (world.name || world.title)) || "";
       state.name = card.name + " · " + (String(fileName).replace(/\.jsonl$/, "").split(" - ").pop() || "chat");
-      state.character = Object.assign({}, state.character, { name: hero.name || card.name, portrait: hero.portrait || "" });
-      state.messages = msgs.map(function (m) {
-        const role = m.is_user ? "user" : (m.is_system ? "action" : "assistant");
-        return { role: role, text: String(m.mes || "").trim(), ts: Date.parse(m.send_date || "") || Date.now() };
-      });
+      state.character = Object.assign({}, state.character, { name: hero.name || playerName, portrait: hero.portrait || "" });
+      state.messages = chatMessagesToImport(msgs, { charName: charName, playerName: playerName });
       state.messageCount = state.messages.length;
-      state.turn = state.messages.length;
+      // One turn per player message, not per message: a 32-message transcript is ~15 turns, and
+      // turn drives memory aging, NPC lastSeen values and the header counter.
+      state.turn = chatTurnCount(state.messages);
       await api().sessionStore.save(state);
       say("Imported " + state.messages.length + ' messages as "' + state.name + '". Open it from Adventures.', "ok");
       notify("Chat imported as an adventure.");

@@ -1079,3 +1079,159 @@ noisy but never data-losing.
 
 **Deploy:** dev clone → push → `git -C "%LOCALAPPDATA%/SillyTavern/Data/data/default-user/extensions/rpg-engine" pull`
 → reload the game page. No Loreweaver-server changes; no packaged-app rebuild required for this one.
+
+## [rpge-patch 027] — Imported card art uses the card file, not the 96×144 thumbnail
+
+**Date:** 2026-11-26. **Trigger:** user report — importing a character card as an NPC or a World
+produced visibly pixelated art ("remove the image quality limiter").
+
+**Root cause:** `src/scripts/loreweaver-import.js` had one image helper for cards,
+`cardThumbUrl()` → `/thumbnail?type=avatar&file=…`, and used it for the stored NPC avatar *and*
+(through `toCoverDataUrl()`, upscaled to 1024px) for the world cover. The thumbnail endpoint
+renders 96×144 by default (`thumbnails.dimensions.avatar: [96, 144]` in Loreweaver's `config.yaml`).
+Measured on the same card: `/characters/<file>` = 464,460-byte PNG, the thumbnail = 9,415 bytes at
+96×144 — the cover was a ~7× upscale of a 9 KB image. The list tile was the only caller that
+actually wanted a thumbnail.
+
+**Fix (`app/src/scripts/loreweaver-import.js` only):**
+- New `cardImageUrl(avatar)` → `/characters/<avatar>` (the card's own file).
+- `buildNpcFromCard()` stores that as the NPC avatar.
+- `importCardAsWorld()` draws the cover from it; the thumbnail remains only as a fallback when the
+  card file cannot be read.
+- The 52px row in `renderChars()` keeps `cardThumbUrl()` (the one correct use).
+- The 1024px cover cap is unchanged: it is the engine's cover geometry (`COVER_MAX_DIM`), shared
+  with the Worlds gallery and the community upload, not a per-import limiter.
+
+**Verified:** `/characters/<name>` serves the full PNG on the running server (200, image/png); the
+served module returns the new helper; regression test `tests/rpg/import-image-quality.test.js`
+(4 assertions) plus the full repo suite (1031 tests) green.
+
+**Existing data:** linked NPCs pick the fix up via the import page's Update button (it rewrites
+linked NPCs from the card). An already-imported world keeps its old cover — *Add as world* always
+creates a new world, so replace the cover in the World Editor instead.
+## [rpge-patch 028] — Import integrity, per-chat presets, hero cap, storage flush, deep links
+
+**Date:** 2026-11-26. **Trigger:** the Loreweaver import/refresh audit: repeated world refreshes
+duplicated lore, edited books never showed "source changed", a stale deleted-world link survived,
+imported chats counted every message as a turn, preset variables reset on every request, saving a
+41st hero silently deleted the first, a pending KV write could die on page close, and the
+extension's deep links could be lost while the app iframe was booting.
+
+**Fixes:**
+- **Import dedupe (app/src/scripts/loreweaver-import-map.js, loreweaver-import.js).**
+  `importedTitleSet` accepts both entry objects and the plain title strings older links stored;
+  rejecting strings made the title set empty and one refresh re-added all 24 entries (measured
+  24 → 48 → 72). When a legacy link has neither titles nor hashes, an exact-content fallback
+  strips one copy before adding. A link to a world that no longer resolves is pruned instead of
+  staying in the row. New world ids are checked against the stored world blob as well as the
+  index, so a stale/failed index read can no longer overwrite an existing world with the same slug.
+- **Book change detection.** `bookHash` folds the book's entries, not only `file_id + name`, so
+  editing a lorebook now marks the card world as source-changed; a per-row "Refresh world"
+  button re-applies the linked card's fields without creating a second world.
+- **Card world fidelity.** `{{char}}` in the card's world fields resolves to the card name (the
+  engine only substitutes `{{user}}`); self-NPC imports are refused (the card is already the
+  world); narrative vibe replaces instead of appending on every refresh; tags are unioned.
+- **Lore typing.** `loreTypeForTitle` maps keyword-typed titles onto the engine's lore types, so
+  imported entries land under Character/Location/Law instead of all as generic lore. World Info
+  books have no types, so only unambiguous place/rule titles are promoted (Location/Law); the rest
+  stay generic lore instead of being mislabelled as characters. The map subsystem can now see
+  imported book locations.
+- **Card NPC fidelity.** Imported NPCs resolve `{{char}}` in their persona and scenario before
+  storage (the engine only substitutes `{{user}}` at prompt time), and keep the full card image as
+  their avatar. Card lore titles/keywords resolve `{{char}}` too.
+- **World Info fidelity.** Entries with `probability: 0` are skipped (SillyTavern never fires them;
+  importing them as always-on inverted the author's intent). Simple `use_regex` keys were initially
+  converted to literal triggers because the engine escaped regex; patch 029 gives the engine native
+  regex keys and preserves them as authored.
+- **Chat import semantics.** `chatTurnCount` counts user messages as turns (the engine's turn
+  counter), the persona is the player hero rather than the character card, and imported chats
+  start with an empty NPC cast instead of inventing one from the card.
+- **Per-chat preset variables (app/src/scripts/presets.js, rp-engine.js).** `assemblePresetPrompt`
+  uses the caller's `ctx.vars` Map instead of a fresh empty one; `buildContext` seeds it from the
+  hero/session and persists `state.presetVars` (never `__pick:` values). Previously every request
+  re-rolled/cleared the preset's variables.
+- **Saved-hero cap (app/src/scripts/storage.js, main.js).** `save()` refuses a 41st hero with
+  `code: "hero-limit"` instead of shifting the oldest out; the UI toasts that nothing was
+  overwritten and shows "n / 40 saved". The import page writes `savedHeroes` directly; its own
+  `shift()` cap (which silently deleted the oldest hero on a 41st persona import) now refuses
+  with the same `hero-limit` error instead.
+- **Storage flush (app/shims/loreweaver-storage.js).** Debounced KV writes get a `pending` map and
+  a keepalive flush on `pagehide`/hidden `visibilitychange`; deletes go out immediately. Verified
+  live: a key written just before `pagehide` reached the server, and a delete removed it.
+- **Deep links (extension index.js, app/src/scripts/main.js).** The app now queues an `rpgeOpen`
+  that arrives before `init()` mounted its shells, announces `rpgeReady` when booted, and acks
+  with its document's `performance.timeOrigin`; the wrapper waits for ready, retries until a
+  valid ack, and ignores an ack from a document a reload is replacing. Measured: a link posted
+  during iframe reload used to be acked by the old document and lost (page stayed Worlds); after
+  the fix it lands on Import from Loreweaver, and settings/aimodel opens the AI Model section.
+- **Security/cleanup.** The app message listener requires `e.source === window.parent` and the
+  same origin; the dead extension checkbox and its unused settings imports were removed.
+
+**Verified:** `tests/rpg` (import map, `chatTurnCount`, `{{user}}` substitution, image quality) plus
+the full suite: 43 suites / 1066 tests green against this checkout. Live on 127.0.0.1:8001:
+cold-boot imports and settings deep links; the 24-entry world refresh stays at 24; the saved-hero
+cap refuses without deleting; a pending KV key survives `pagehide`.
+
+## [rpge-patch 029] — Native World Info equivalents (order, chance, selective AND, regex, at-depth)
+
+**Date:** 2026-11-26. **Trigger:** imported SillyTavern books carried only title/type/activation/
+keywords/content. `order`, `depth`, `role`, `probability`, `selective` and `use_regex` were either
+dropped or approximated at import, so author intent changed in the engine. Patch 028 literalized
+simple regex keys because the matcher escaped them; this patch removes that workaround by teaching
+the engine the fields natively.
+
+**Files:** `app/src/scripts/lorebook.js` (schema, matching, selection, placement helpers),
+`app/src/scripts/rp-engine.js` (transcript assembly), `app/src/scripts/world.js` (save shape),
+`app/src/scripts/world-editor.js` (advanced controls), `app/src/styles.css`, and
+`app/src/scripts/loreweaver-import-map.js` (carry the fields instead of translating them).
+New tests: `tests/rpg/lorebook-features.test.js`, `tests/rpg/rp-engine-lore-depth.test.js`,
+`tests/rpg/world-lore-persistence.test.js`; the import-map suite was updated.
+
+**Schema (`normalizeLoreEntry`).** All fields are optional and default to the old behavior:
+`order: 0`, `probability: 100`, `selective: false`, `secondary: []`, `useRegex: false`, `role: ""`,
+`depth: null`. Depth clamps to 0–999, probability to 0–100, role accepts `system`/`user`/`assistant`
+or 0/1/2. `use_regex`, `secondary_keys` and `keysecondary` are accepted aliases. `selective` is only
+kept when activation is `keywords` and at least one secondary key exists; `injection` is true only
+when both `role` and `depth` are authored. `splitRegexKeywords` splits one key per line/chip without
+breaking `|`, `{}` or escapes.
+
+**Matching.** `regexKeywordHits` compiles each key case-insensitively; an invalid pattern falls back
+to literal matching for that key, never throwing the turn. `loreEntryMatches` uses one primary OR
+list and, when selective, one secondary OR list as a hard AND gate. `loreKeywordHits` makes the
+digest helpers (`lorebookForText`, `keywordLoreForText`) honor the same rule. The BM25 candidate
+prefilter uses the same matcher, so regex/selective entries can enter ranking at all.
+
+**Selection.** `selectLoreForTurn` applies chance, the selective gate, then the existing BM25 /
+embedding ranking and feed caps. `probability: 0` never fires, `100` always does; intermediate
+rolls use `hash32(adventureId|turn|title)`, deterministic per turn so a prompt refit cannot reroll
+canon. Profile/digest calls pass `applyProbability: false`. `order` wins ranking ties and orders
+entries inserted at the same boundary (higher first); it is a tiebreak, not a hard priority.
+`loreForTurn` is now a wrapper over the same selector.
+
+**At-depth insertion (rp-engine).** Positioned entries are removed from the `WORLD LORE` block and
+rendered inside the transcript. `depth` counts messages back from the newest: `0` after the newest
+message, `N` before the Nth-newest, clamped at the transcript start. Same-boundary entries sort by
+`order` descending and render as `[SYSTEM/USER/ASSISTANT LORE] ◆ [type] Title — content`.
+The engine builds one text prompt, so the role is a label, not a chat-message role. On the opening
+turn (no transcript) positioned entries are emitted in a single `WORLD LORE — AT-DEPTH INSERTIONS`
+section in priority order. Standard entries are unchanged.
+
+**Persistence + editor.** `worldToFile` writes advanced fields only when authored (`order` non-zero,
+chance not 100, selective with secondary, regex true, role+depth together), so old worlds stay
+byte-identical. The Lorebook editor adds a collapsed `Advanced — priority, chance & insertion`
+panel: order, chance %, regex checkbox, selective AND checkbox, secondary chip field, role select
+and depth. The role select reveals the depth field; clearing role hides it. Rows show `AND`,
+`regex`, `<100%` and `role @depth` badges. The keyword chip parser switches to regex-safe splitting
+when regex mode is on.
+
+**Importer.** `loreFromWorldInfoEntry` now carries `order`, non-100 `probability`, `secondary` +
+`selective`, `useRegex` (keys unchanged) and, only for World Info `position === 4`, `role` + `depth`
+(default depth 4). A null/blank chance means "unset" (default 100); only an explicit `0` skips the
+entry. A null depth at position 4 defaults to 4. Positions 0–3 remain standing lore, which matches how the engine already treats
+them. `{{char}}` resolution still applies to primary/secondary keys and card prose. Card-book
+imports get the same fields.
+
+**Verified:** `tests/rpg` 7 suites / 56 tests green; full copy suite 46 suites / 1088 tests green.
+Live on 127.0.0.1:8001: opened the imported world's Lorebook tab, confirmed the advanced panel,
+the role→depth reveal, and that the fields are saved only when authored. The live check's unsaved
+edit was discarded by an iframe reload, so no adventure data changed.

@@ -285,7 +285,8 @@ export function expandMacros(text, ctx = {}) {
 export function assemblePresetPrompt(preset, ctx = {}) {
   const out = { inFlow: "", injections: [] };
   if (!preset || !Array.isArray(preset.order)) return out;
-  const vars = new Map();
+  // Caller-owned when supplied: setvar values are per-chat state in ST and must survive turns.
+  const vars = ctx.vars instanceof Map ? ctx.vars : new Map();
   const macroCtx = { ...ctx, vars };
   const inFlow = [];
   let seq = 0;

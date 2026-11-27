@@ -93,11 +93,12 @@
     }
     return tokenPromise;
   }
-  async function api(op, body) {
+  async function api(op, body, keepalive) {
     const token = await getToken();
     const send = () => fetch(new URL("/api/rpg-engine-kv/" + op, location.origin), {
       method: "POST",
       credentials: "include",
+      keepalive: !!keepalive,
       headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
       body: JSON.stringify(body || {}),
     });
@@ -108,6 +109,7 @@
       res = await fetch(new URL("/api/rpg-engine-kv/" + op, location.origin), {
         method: "POST",
         credentials: "include",
+        keepalive: !!keepalive,
         headers: { "Content-Type": "application/json", "X-CSRF-Token": t2 },
         body: JSON.stringify(body || {}),
       });
@@ -118,21 +120,37 @@
 
   // ---- write-through mirroring ----
   const timers = new Map(); // metaKey -> timeout
-  function schedule(folder, key, fn) {
+  const pending = new Map(); // metaKey -> {folder, key, op, value} (sent by flushPending on unload)
+  function schedule(folder, key, op, value, fn) {
     const mk = metaKey(folder, key);
     clearTimeout(timers.get(mk));
-    timers.set(mk, setTimeout(() => { timers.delete(mk); fn(); }, DEBOUNCE_MS));
+    pending.set(mk, { folder, key, op, value, fn });
+    timers.set(mk, setTimeout(() => {
+      timers.delete(mk); pending.delete(mk); fn();
+    }, DEBOUNCE_MS));
+  }
+  // The debounce is per-key, so a save made in the last 400 ms before the tab closes would never
+  // reach the server (and the next boot compared mtimes, not values, so it was never retried).
+  // keepalive lets those fetch calls outlive the page. Bodies over the browser's 64 KB keepalive
+  // limit still fall back to the normal request, which the unload may cancel - the local copy
+  // stays authoritative and the next save rewrites it.
+  function flushPending() {
+    for (const [mk, e] of pending) {
+      clearTimeout(timers.get(mk));
+      pending.delete(mk);
+      try { e.fn(true); } catch (err) { console.warn("[rpge saves] unload flush failed:", (err && err.message) || err); }
+    }
   }
 
   function mirrorFolder(name, folder) {
     const wrapped = Object.create(folder); // reads pass through to the local store
-    const pushValue = async (key, value) => {
+    const pushValue = async (key, value, keepalive) => {
       if (!firstSyncDone && serverNames.has(nameOf(name, key))) {
         console.warn("[rpge saves] skipped pre-sync push of", name + "/" + key, "— server copy not yet loaded; first reconcile will merge it.");
         return;
       }
       try {
-        const r = await api("put", { name: nameOf(name, key), content: JSON.stringify(value === undefined ? null : value) });
+        const r = await api("put", { name: nameOf(name, key), content: JSON.stringify(value === undefined ? null : value) }, keepalive);
         const m = readMeta();
         m[metaKey(name, key)] = r.mtimeMs;
         writeMeta(m);
@@ -140,13 +158,13 @@
         console.warn("[rpge saves] server push failed for", name + "/" + key, "(kept locally, retried next load):", (e && e.message) || e);
       }
     };
-    const pushDelete = async (key) => {
+    const pushDelete = async (key, keepalive) => {
       if (!firstSyncDone && serverNames.has(nameOf(name, key))) {
         console.warn("[rpge saves] skipped pre-sync delete of", name + "/" + key, "— server copy not yet loaded; first reconcile will merge it.");
         return;
       }
       try {
-        await api("delete", { name: nameOf(name, key) });
+        await api("delete", { name: nameOf(name, key) }, keepalive);
         const m = readMeta();
         delete m[metaKey(name, key)];
         writeMeta(m);
@@ -156,33 +174,41 @@
     };
     wrapped.set = async function (key, value) {
       const out = await folder.set(key, value);
-      schedule(name, key, () => pushValue(key, value));
+      schedule(name, key, "put", value, (ka) => pushValue(key, value, ka));
       return out;
     };
     wrapped.setMany = async function (obj) {
       const out = await folder.setMany(obj);
-      for (const [k, v] of Object.entries(obj || {})) schedule(name, k, () => pushValue(k, v));
+      for (const [k, v] of Object.entries(obj || {})) schedule(name, k, "put", v, (ka) => pushValue(k, v, ka));
       return out;
     };
     wrapped.update = async function (key, fn) {
       const out = await folder.update(key, fn);
-      schedule(name, key, () => pushValue(key, out === undefined ? undefined : out));
+      schedule(name, key, "put", out === undefined ? undefined : out, (ka) => pushValue(key, out === undefined ? undefined : out, ka));
       return out;
     };
     wrapped.delete = async function (key) {
       const out = await folder.delete(key);
-      schedule(name, key, () => pushDelete(key));
+      // Deletes bypass the debounce: a resurrected save is worse than one extra request, and the
+      // next boot's tombstone logic cannot tell an unsent delete from a key that never existed.
+      const mk = metaKey(name, key);
+      clearTimeout(timers.get(mk)); timers.delete(mk); pending.delete(mk);
+      pushDelete(key);
       return out;
     };
     wrapped.deleteMany = async function (keys) {
       const out = await folder.deleteMany(keys);
-      for (const k of keys || []) schedule(name, k, () => pushDelete(k));
+      for (const k of keys || []) {
+        const mk = metaKey(name, k);
+        clearTimeout(timers.get(mk)); timers.delete(mk); pending.delete(mk);
+        pushDelete(k);
+      }
       return out;
     };
     wrapped.clear = async function () {
       const out = await folder.clear();
       // wipe the whole folder server-side so a boot reconcile cannot resurrect keys
-      schedule(name, "\u0000clear", async () => {
+      schedule(name, "\u0000clear", "clear", null, async () => {
         if (!firstSyncDone) { console.warn("[rpge saves] skipped pre-sync server wipe of", name); return; }
         try {
           const { entries } = await api("list", {});
@@ -298,6 +324,10 @@
     });
     try { window.root.kv = proxy; } catch (e) { console.warn("[rpge saves] could not install mirrored kv:", e); return; }
     if (!isEnabled()) { console.info("[rpge saves] server-side saves disabled by config."); return; }
+    window.addEventListener("pagehide", flushPending);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") flushPending();
+    });
     // Know the server's entry names as early as possible — pre-sync writes must not clobber
     // server data the browser hasn't loaded yet (see the gate above pushValue/pushDelete).
     api("list", {}).then(({ entries }) => { for (const e of entries) serverNames.add(e.name); }).catch(() => {});

@@ -75,7 +75,9 @@ export class NpcSystem {
   // the NPC's own story excerpt (their name/description always counts as context).
   loreForProfile(storyText, npcName, npcDesc = "") {
     if (this.loreEntries) {
-      return loreForTurn(this.loreEntries, { chatText: storyText, actionText: [npcName, npcDesc].filter(Boolean).join(" "), location: "" });
+      // Profile generation is not a GM turn: chance rolls would make an NPC profile differ
+      // depending on when it was generated, so this digest is always complete.
+      return loreForTurn(this.loreEntries, { chatText: storyText, actionText: [npcName, npcDesc].filter(Boolean).join(" "), location: "", applyProbability: false });
     }
     return (this.loreText || "").trim();
   }

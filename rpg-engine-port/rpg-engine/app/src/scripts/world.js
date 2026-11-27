@@ -660,10 +660,20 @@ export function worldToFile(world) {
     proseRules: proseRulesOn(world),
     threadFires: (world && world.threadFires !== false),
     sceneDice: (world && world.sceneDice !== false),
-    lorebook: (world.lorebook || []).map((e) => ({
-      title: e.title || "", type: e.type || "lore", activation: e.activation || "always",
-      keywords: e.keywords || [], content: e.content || ""
-    })),
+    // World Info equivalents ride only when authored, so worlds saved before this feature stay
+    // byte-identical and old importers keep working.
+    lorebook: (world.lorebook || []).map((e) => {
+      const out = {
+        title: e.title || "", type: e.type || "lore", activation: e.activation || "always",
+        keywords: e.keywords || [], content: e.content || ""
+      };
+      if (e.order) out.order = e.order;
+      if (e.probability !== undefined && e.probability !== null && Number(e.probability) !== 100) out.probability = e.probability;
+      if (e.selective && (e.secondary || []).length) { out.selective = true; out.secondary = e.secondary; }
+      if (e.useRegex) out.useRegex = true;
+      if (e.role && e.depth !== null && e.depth !== undefined) { out.role = e.role; out.depth = e.depth; }
+      return out;
+    }),
     scenario: world.scenario,
     start: first.text,
     startMode: first.mode,

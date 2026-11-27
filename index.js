@@ -1,9 +1,3 @@
-// Import from SillyTavern core
-// Absolute paths on purpose: this folder used to live one level deeper (extensions/third-party/),
-// so a relative ../../.. silently 404s after the move and the whole extension never registers.
-import { extension_settings, getContext, loadExtensionSettings } from "/scripts/extensions.js";
-import { saveSettingsDebounced } from "/script.js";
-
 // Extension name MUST match folder name
 const extensionName = "rpg-engine";
 // Derived from this module's own URL, so the settings HTML resolves wherever the folder sits.
@@ -14,25 +8,6 @@ const extensionFolderPath = new URL(".", import.meta.url).pathname.replace(/^\//
 // section, and the "Import from Loreweaver" landing page), and these buttons deep-link there.
 // The full game app lives inside the port folder. Its own wrapper (rpg-engine-port/rpg-engine/index.js)
 // adds the floating ⚔ launcher + wand-menu entry + full-screen overlay, and exposes window.rpgEngine.
-
-const defaultSettings = {
-    enabled: false
-};
-
-function loadSettings() {
-    extension_settings[extensionName] = extension_settings[extensionName] || {};
-    if (Object.keys(extension_settings[extensionName]).length === 0) {
-        Object.assign(extension_settings[extensionName], defaultSettings);
-    }
-    $("#rpg_engine_checkbox").prop("checked", extension_settings[extensionName].enabled);
-}
-
-function onCheckboxChange(event) {
-    const value = Boolean($(event.target).prop("checked"));
-    extension_settings[extensionName].enabled = value;
-    saveSettingsDebounced();
-    console.log(`[${extensionName}] Setting saved:`, value);
-}
 
 function onButtonClick() {
     // Launch the game instead of just reporting status.
@@ -74,12 +49,11 @@ jQuery(async () => {
         // Append to settings panel (right column for UI extensions)
         $("#extensions_settings2").append(settingsHtml);
 
-        // Bind events and load saved settings
-        $("#rpg_engine_checkbox").on("input", onCheckboxChange);
+        // Bind events. The old "Enable RPG Engine" checkbox was written to settings but never
+        // read (the wrapper installs unconditionally), so it was removed rather than left lying.
         $("#rpg_engine_button").on("click", onButtonClick);
         $("#rpg_engine_bridge").on("click", onBridgeClick);
         $("#rpg_engine_import").on("click", onImportClick);
-        loadSettings();
 
         // Load the game wrapper (overlay + ⚔ launcher + wand-menu entry).
         import(new URL("./rpg-engine-port/rpg-engine/index.js", import.meta.url).href)

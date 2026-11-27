@@ -56,6 +56,53 @@ const str = (v) => (v === undefined || v === null ? "" : String(v));
 const cleanKw = (raw) => str(raw).trim().replace(/^[^a-zA-Z0-9]+/, "").replace(/[^a-zA-Z0-9]+$/, "").toLowerCase();
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// Engine equivalents of the SillyTavern World Info fields the engine used to drop. All are
+// optional: an entry without them behaves exactly as before (normal relevance-ranked lore).
+export const LORE_ROLES = ["system", "user", "assistant"];
+export const LORE_DEFAULT_PROBABILITY = 100;
+const ROLE_ALIASES = { 0: "system", 1: "user", 2: "assistant", system: "system", user: "user", assistant: "assistant" };
+
+function flag(v) {
+  return v === true || v === 1 || String(v).toLowerCase() === "true" || v === "1";
+}
+
+export function normalizeLoreRole(v) {
+  if (v === undefined || v === null || v === "") return "";
+  return ROLE_ALIASES[String(v).trim().toLowerCase()] || "";
+}
+
+export function normalizeLoreDepth(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(999, Math.trunc(n))) : null;
+}
+
+export function normalizeLoreProbability(v) {
+  if (v === undefined || v === null || v === "") return LORE_DEFAULT_PROBABILITY;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : LORE_DEFAULT_PROBABILITY;
+}
+
+export function normalizeLoreOrder(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : 0;
+}
+
+// Regex keys are NOT split on | or , - the pattern owns them. One pattern per array item or per
+// line; exact duplicates are dropped without changing case.
+export function splitRegexKeywords(v) {
+  const parts = Array.isArray(v) ? v : String(v === undefined || v === null ? "" : v).split(/\r?\n/);
+  const out = [];
+  const seen = new Set();
+  for (const raw of parts) {
+    const k = str(raw).trim();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(k);
+  }
+  return out;
+}
+
 // Accept keywords as a single string (comma / | / ; separated), an array, or an array of strings
 // containing separators. Returns a de-duplicated, lower-cased keyword list (leading/trailing
 // punctuation stripped). Empty items are dropped.
@@ -72,14 +119,16 @@ export function splitKeywords(v) {
   return out;
 }
 
-// Normalize one entry (any legacy/sloppy shape) into the canonical runtime form:
-//   { title, type, activation: "always"|"keywords", keywords: string[], content }
+// Normalize one entry (any legacy/sloppy shape) into the canonical runtime form. The World Info
+// equivalents are additive: order (priority), probability (per-turn chance), selective + secondary
+// (AND trigger), useRegex (keys are patterns), and role/depth (insert into the transcript instead of
+// the standing WORLD LORE section). Entries without them normalize exactly as before.
 // Returns null for rows that are completely empty (dropped by callers).
 export function normalizeLoreEntry(raw, fallbackIndex = 0) {
   if (typeof raw === "string") {
     const c = raw.trim();
     if (!c) return null;
-    return { title: "", type: "lore", activation: "always", keywords: [], content: c };
+    return normalizeLoreEntry({ content: c }, fallbackIndex);
   }
   if (!raw || typeof raw !== "object") return null;
   const content = str(raw.content).trim();
@@ -87,17 +136,37 @@ export function normalizeLoreEntry(raw, fallbackIndex = 0) {
   if (!content && !title) return null;
   let activation = str(raw.activation).trim().toLowerCase();
   if (activation !== "keywords") activation = "always";
-  let keywords = splitKeywords(raw.keywords);
-  if (activation === "keywords" && !keywords.length) activation = "always"; // no triggers → always on
+  const useRegex = flag(raw.useRegex ?? raw.use_regex);
+  let keywords = useRegex ? splitRegexKeywords(raw.keywords) : splitKeywords(raw.keywords);
+  if (activation === "keywords" && !keywords.length) activation = "always"; // no triggers -> always on
+  const secondaryRaw = raw.secondary ?? raw.secondary_keys ?? raw.keysecondary;
+  const secondary = useRegex ? splitRegexKeywords(secondaryRaw) : splitKeywords(secondaryRaw);
+  // Selective means the primary trigger AND at least one secondary trigger must match. Without a
+  // secondary list there is nothing to AND, so the entry stays an ordinary keyword entry.
+  const selective = flag(raw.selective) && secondary.length > 0 && activation === "keywords";
+  const order = normalizeLoreOrder(raw.order);
+  const probability = normalizeLoreProbability(raw.probability);
+  const role = normalizeLoreRole(raw.role);
+  const depth = normalizeLoreDepth(raw.depth);
   const type = str(raw.type).trim().toLowerCase() || "lore";
   return {
     title,
     // Types outside the fixed vocabulary fold into the generic "lore" bucket (the model reads the
-    // tag itself, so a stray imported tag loses nothing — its content is what matters).
+    // tag itself, so a stray imported tag loses nothing - its content is what matters).
     type: LORE_TYPES.includes(type) ? type : "lore",
     activation,
     keywords,
-    content
+    content,
+    order,
+    probability,
+    selective,
+    secondary,
+    useRegex,
+    role,
+    depth,
+    // At-depth insertion is opt-in: both a role and a depth must be authored. A bare role or a
+    // bare depth is ignored by the context builder, so old data can never move by accident.
+    injection: !!role && depth !== null
   };
 }
 
@@ -111,7 +180,7 @@ export function normalizeLorebook(raw) {
       if (n) out.push(n);
     });
   } else if (typeof raw === "string" && raw.trim()) {
-    out.push({ title: "", type: "world", activation: "always", keywords: [], content: raw.trim() });
+    out.push(normalizeLoreEntry({ title: "", type: "world", activation: "always", content: raw.trim() }));
   }
   return out;
 }
@@ -121,6 +190,50 @@ export function keywordHits(text, kw) {
   if (!text || !kw) return false;
   try { return new RegExp("(?<![a-z0-9])" + escRe(kw) + "(?![a-z0-9])", "i").test(text); }
   catch (e) { return text.toLowerCase().includes(kw.toLowerCase()); }
+}
+
+// Regex trigger (World Info use_regex). Invalid patterns fall back to the literal matcher so a
+// malformed imported key can never make the whole turn throw.
+export function regexKeywordHits(text, pattern) {
+  if (!text || !pattern) return false;
+  try { return new RegExp(pattern, "i").test(text); }
+  catch (e) { return keywordHits(text, pattern); }
+}
+
+// Match one trigger against the scene using the entry's own key mode.
+export function loreKeywordHits(entry, text, kw) {
+  return entry && entry.useRegex ? regexKeywordHits(text, kw) : keywordHits(text, kw);
+}
+
+// Full trigger rule for an entry: activation, primary keys, and the selective AND gate. An
+// always entry matches unconditionally; a keyword entry needs one primary key and, when
+// selective, one secondary key as well (SillyTavern treats each list as OR, the two as AND).
+export function loreEntryMatches(entry, text) {
+  if (!entry) return false;
+  if (entry.activation !== "keywords") return true;
+  const hay = str(text);
+  if (!hay) return false;
+  const primary = (entry.keywords || []).some((kw) => loreKeywordHits(entry, hay, kw));
+  if (!primary) return false;
+  if (entry.selective && (entry.secondary || []).length) {
+    return (entry.secondary || []).some((kw) => loreKeywordHits(entry, hay, kw));
+  }
+  return true;
+}
+
+// Insertion point for an at-depth entry. Depth counts MESSAGES back from the newest one; depth 0
+// means after the newest message, depth 2 means before the second-newest. Clamped to the window.
+export function loreInsertionIndex(entry, messageCount) {
+  const count = Math.max(0, Math.trunc(Number(messageCount) || 0));
+  const depth = Math.max(0, Math.trunc(Number(entry && entry.depth) || 0));
+  return Math.max(0, count - depth);
+}
+
+// One at-depth transcript line. The role label is the engine's equivalent of a SillyTavern
+// system/user/assistant insertion: the GM sees the canon fact in place, attributed as authored.
+export function renderLoreInsertion(entry) {
+  const role = normalizeLoreRole(entry && entry.role) || "system";
+  return "[" + role.toUpperCase() + " LORE] " + renderLoreEntry(entry);
 }
 
 // Everyday function words. Two jobs, kept here beside the matcher both consumers use so they can
@@ -339,11 +452,7 @@ export function lorebookForText(entries, text) {
   const sel = [];
   for (const e of entries || []) {
     if (!e || !str(e.content).trim()) continue;
-    if (e.activation === "keywords") {
-      if (hay && (e.keywords || []).some((kw) => keywordHits(hay, kw))) sel.push(e);
-    } else {
-      sel.push(e); // always
-    }
+    if (loreEntryMatches(e, hay)) sel.push(e);
   }
   return sel.map(renderLoreEntry).join("\n\n");
 }
@@ -355,7 +464,7 @@ export function keywordLoreForText(entries, text, { types = null, capChars = 0 }
   const hay = str(text);
   const sel = (entries || []).filter((e) => e && e.activation === "keywords" && str(e.content).trim()
     && (!types || types.includes(e.type))
-    && hay && (e.keywords || []).some((kw) => keywordHits(hay, kw)));
+    && loreEntryMatches(e, hay));
   let out = sel.map(renderLoreEntry).join("\n\n");
   if (capChars > 0 && out.length > capChars) out = out.slice(0, capChars);
   return out;
@@ -372,36 +481,61 @@ export function loreDocText(e) {
   return [title, kwPart, content].filter(Boolean).join(" ");
 }
 
-// Compose the WORLD LORE section for one GM turn. `chatTurns` = the recent transcript as per-turn
-// strings (oldest → newest, from RPEngine.recentChatTurns), `actionText` = the player's latest
-// action/directive, `location` = the current location tracker value (both part of "what the scene
-// is about"). `chatText` (a single joined blob) is still accepted when no per-turn split is
-// available. The "always" tier is fed in full; the "keywords" tier is relevance-ranked — split
-// BM25 (latest action 0.6 / window + location 0.4, each normalized by its own max) fused with
-// split embedding cosines (RRF; 0.75/0.25) when `hybrid.queryVecAction/queryVecContext` are
-// passed, BM25 alone otherwise (no keyword prefilter — morphological variants and paraphrases
-// still surface) — with a ×0.4 soft penalty when none of the author's trigger words appear
-// verbatim, then capped
-// (LORE_FEED_CAP / LORE_FEED_MAX_CHARS) so a big or shotgun-triggered book can't flood the
-// context. Fused/ranked ties break toward latest-action evidence, then book order. When every
-// score is 0 the rank falls back to scene recency (action → location →
-// newest turn). Returns "" when nothing applies.
-export function loreForTurn(entries, { chatTurns = null, chatText = "", actionText = "", location = "", feedCap = LORE_FEED_CAP, maxChars = LORE_FEED_MAX_CHARS } = {}, hybrid = null) {
+// Stable 32-bit string hash for deterministic probability rolls: the same adventure + turn +
+// entry gets the same roll, so rebuilding the prompt (fitting passes, retries) cannot silently
+// swap lore. A different turn re-rolls naturally.
+function hash32(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function probabilityPasses(entry, seed, index) {
+  const p = normalizeLoreProbability(entry && entry.probability);
+  if (p >= 100) return true;
+  if (p <= 0) return false;
+  if (seed === null || seed === undefined || seed === "") return Math.random() * 100 < p;
+  // Keep the roll stable across entry reordering: title is the identity, index only backs up
+  // an untitled row.
+  const key = str(entry && entry.title) || String(index);
+  return (hash32(String(seed) + "|" + key) % 100) < p;
+}
+
+// Select the lore entries for one GM turn without rendering. Returns { always, chosen } as entry
+// objects so the context builder can split standard entries from at-depth insertions. The
+// "always" tier is fed in full (unless its probability roll fails); the "keywords" tier is
+// relevance-ranked - split BM25 (latest action 0.6 / window + location 0.4, each normalized by
+// its own max) fused with split embedding cosines (RRF; 0.75/0.25) when `hybrid.queryVecAction/
+// queryVecContext` are passed, BM25 alone otherwise (no keyword prefilter - morphological variants
+// and paraphrases still surface) - with a x0.4 soft penalty when none of the author's trigger words
+// appear verbatim, then capped (LORE_FEED_CAP / LORE_FEED_MAX_CHARS) so a big or shotgun-triggered
+// book can't flood the context. Higher `order` wins ties; when every score is 0 the rank falls back
+// to scene recency (action -> location -> newest turn). Selective entries must satisfy both key
+// lists (AND) before they are eligible at all.
+export function selectLoreForTurn(entries, { chatTurns = null, chatText = "", actionText = "", location = "", feedCap = LORE_FEED_CAP, maxChars = LORE_FEED_MAX_CHARS, applyProbability = true, seed = null } = {}, hybrid = null) {
   const turns = Array.isArray(chatTurns) ? chatTurns.map((t) => str(t)).filter((t) => t.trim()) : [];
   const blob = str(chatText);
   const act = str(actionText);
   const loc = str(location);
-  const always = [];
-  const cands = [];
-  (entries || []).forEach((e, i) => {
-    if (!e || !str(e.content).trim()) return;
-    if (e.activation !== "keywords") { always.push({ e, i }); return; }
-    cands.push({ e, i });
-  });
   const windowText = turns.length ? turns.join("\n") : blob;
   const qAction = act.trim();
   const qContext = [windowText, loc].filter((t) => t && t.trim()).join("\n").trim();
   const query = [windowText, act, loc].filter((t) => t && t.trim()).join("\n");
+  const always = [];
+  const cands = [];
+  (entries || []).forEach((e, i) => {
+    if (!e || !str(e.content).trim()) return;
+    if (applyProbability && !probabilityPasses(e, seed, i)) return;
+    if (e.activation !== "keywords") { always.push({ e, i }); return; }
+    // Selective is a hard gate: a semantic near-match without BOTH authored key sets must not
+    // fire, or the AND semantics would be meaningless.
+    if (e.selective && !loreEntryMatches(e, query)) return;
+    cands.push({ e, i });
+  });
+  always.sort((a, b) => (normalizeLoreOrder(b.e.order) - normalizeLoreOrder(a.e.order)) || (a.i - b.i));
   let ordered = [];
   if (cands.length && query.trim()) {
     try {
@@ -410,26 +544,29 @@ export function loreForTurn(entries, { chatTurns = null, chatText = "", actionTe
     } catch (e) { ordered = []; }
   }
   if (!ordered.length) {
-    // Fallback: old scene-recency rank (immediate scene first, then newest turn).
+    // Fallback: old scene-recency rank (immediate scene first, then newest turn), with order as
+    // the author-priority tiebreak.
     const scored = [];
     for (const { e, i } of cands) {
       const kws = e.keywords || [];
       if (!kws.length) continue;
       let r = -1;
-      if (act && kws.some((kw) => keywordHits(act, kw))) r = 0;
-      else if (loc && kws.some((kw) => keywordHits(loc, kw))) r = 1;
+      if (act && kws.some((kw) => loreKeywordHits(e, act, kw))) r = 0;
+      else if (loc && kws.some((kw) => loreKeywordHits(e, loc, kw))) r = 1;
       else {
         for (let t = turns.length - 1; t >= 0; t--) {
-          if (kws.some((kw) => keywordHits(turns[t], kw))) { r = 2 + (turns.length - 1 - t); break; }
+          if (kws.some((kw) => loreKeywordHits(e, turns[t], kw))) { r = 2 + (turns.length - 1 - t); break; }
         }
-        if (r < 0 && blob && kws.some((kw) => keywordHits(blob, kw))) r = 2 + turns.length;
+        if (r < 0 && blob && kws.some((kw) => loreKeywordHits(e, blob, kw))) r = 2 + turns.length;
       }
       if (r >= 0) scored.push({ e, i, r });
     }
-    scored.sort((a, b) => (a.r - b.r) || (a.i - b.i));
+    // Recency is the reason this fallback exists; order only breaks ties between equally recent
+    // triggers (putting order first let an old high-priority entry starve the current scene).
+    scored.sort((a, b) => (a.r - b.r) || (normalizeLoreOrder(b.e.order) - normalizeLoreOrder(a.e.order)) || (a.i - b.i));
     ordered = scored.map((s) => ({ e: s.e, i: s.i }));
   }
- const chosen = [];
+  const chosen = [];
   let chars = 0;
   for (const s of ordered) {
     if (chosen.length >= feedCap) break;
@@ -438,10 +575,21 @@ export function loreForTurn(entries, { chatTurns = null, chatText = "", actionTe
     // Always admit the top-ranked entry (a fact the scene clearly touches is never dropped
     // wholesale); past that, stop before the keyword tier outgrows its character budget.
     if (chosen.length && chars + text.length > maxChars) break;
-    chosen.push(text);
+    chosen.push(s.e);
     chars += text.length + 2;
   }
-  return always.map((a) => renderLoreEntry(a.e)).filter(Boolean).concat(chosen).join("\n\n");
+  return { always: always.map((a) => a.e), chosen };
+}
+
+export function renderLoreSelection(selection) {
+  const sel = selection || {};
+  return (sel.always || []).map(renderLoreEntry).filter(Boolean)
+    .concat((sel.chosen || []).map(renderLoreEntry).filter(Boolean))
+    .join("\n\n");
+}
+
+export function loreForTurn(entries, opts = {}, hybrid = null) {
+  return renderLoreSelection(selectLoreForTurn(entries, opts, hybrid));
 }
 
 // Rank lore candidates best-first. Split BM25 over the weighted doc text — the latest
@@ -478,7 +626,7 @@ function rankLoreCandidates(cands, queries, hybrid = null) {
   let maxScore = 0;
   const penalized = cands.map((cand, idx) => {
     const kws = (cand && cand.e && cand.e.keywords) || [];
-    const hasHit = !!(kws.length && qCombined && kws.some((kw) => keywordHits(qCombined, kw)));
+    const hasHit = !!(kws.length && qCombined && kws.some((kw) => loreKeywordHits(cand.e, qCombined, kw)));
     hitOf.set(cand, hasHit);
     const na = aRank.max > 0 ? (aRank.map.get(cand) || 0) / aRank.max : 0;
     const nc = cRank.max > 0 ? (cRank.map.get(cand) || 0) / cRank.max : 0;
@@ -488,7 +636,7 @@ function rankLoreCandidates(cands, queries, hybrid = null) {
     if (s > maxScore) maxScore = s;
     return { cand, e: cand.e, i: cand.i, score: s };
   });
-  penalized.sort((a, b) => (b.score - a.score) || (intentOf(b.cand) - intentOf(a.cand)) || (a.i - b.i));
+  penalized.sort((a, b) => (b.score - a.score) || (normalizeLoreOrder(b.e.order) - normalizeLoreOrder(a.e.order)) || (intentOf(b.cand) - intentOf(a.cand)) || (a.i - b.i));
   const positive = penalized.filter((p) => p.score > 0);
   positive.forEach((p, rank) => posOf.set(p.cand, rank));
   const qv = hybrid && hybrid.queryVec;
@@ -499,7 +647,7 @@ function rankLoreCandidates(cands, queries, hybrid = null) {
     if (!cosOf.size) return null;
     const embRank = new Map([...cosOf.entries()].sort((a, b) => b[1] - a[1]).map(([c], rank) => [c, rank]));
     const fused = fuseRrf(new Set([...posOf.keys(), ...embRank.keys()]), posOf, embRank, hitOf, BM25_NO_KEYWORD_PENALTY);
-    fused.sort((a, b) => (b.score - a.score) || (intentOf(b.cand) - intentOf(a.cand)) || (a.rb - b.rb) || (a.cand.i - b.cand.i));
+    fused.sort((a, b) => (b.score - a.score) || (normalizeLoreOrder(b.cand.e.order) - normalizeLoreOrder(a.cand.e.order)) || (intentOf(b.cand) - intentOf(a.cand)) || (a.rb - b.rb) || (a.cand.i - b.cand.i));
     return fused;
   };
   let fused = null;

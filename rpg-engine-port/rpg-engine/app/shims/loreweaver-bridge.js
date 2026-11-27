@@ -49,7 +49,7 @@
   const CFG_KEY = "rpge.loreweaverBridge";
   const BRIDGE_PATH = "/api/backends/chat-completions/generate";
   const CHAT_RE = /\/chat\/completions\/?$/;
-  const SETTINGS_TTL = 5 * 60 * 1000;
+  const SETTINGS_TTL = 60 * 1000; // profiles/presets change in another tab; a stale 5 min misled
 
   // Engine job ids (AI_ROUTE_IDS in src/scripts/ai-provider.js) + the cheap secondary
   // model page. Labels are for the bridge config page only.
@@ -167,10 +167,18 @@
   // the call's job id picks cfg.roles[roleId] when set, else the main profile.
   async function buildBridgedPayload(url, payload, roleId) {
     const cfg = readCfg();
-    const lw = await getLoreweaverSettings();
-    if (!lw.profiles.length) throw new Error("No connection profiles in Loreweaver (Connection Manager is empty).");
+    let lw = await getLoreweaverSettings();
     const roles = cfg.roles && typeof cfg.roles === "object" ? cfg.roles : {};
     const rolePid = roleId && roleId !== "main" ? String(roles[roleId] || "") : "";
+    // A profile added/renamed/removed in Connection Manager is invisible for up to the TTL. If
+    // the cached snapshot cannot satisfy this call, refetch once before failing the turn.
+    const has = (id) => !!id && lw.profiles.some((p) => p && p.id === id);
+    if (!lw.profiles.length || (rolePid && !has(rolePid)) || (cfg.profileId && !has(cfg.profileId))) {
+      settingsPromise = null;
+      settingsAt = 0;
+      lw = await getLoreweaverSettings();
+    }
+    if (!lw.profiles.length) throw new Error("No connection profiles in Loreweaver (Connection Manager is empty).");
     let profile = rolePid ? (lw.profiles.find((p) => p && p.id === rolePid) || null) : null;
     if (!profile) {
       profile = lw.profiles.find((p) => p && p.id === cfg.profileId)

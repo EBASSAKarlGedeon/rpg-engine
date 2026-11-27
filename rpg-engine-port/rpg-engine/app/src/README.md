@@ -1095,7 +1095,8 @@ pinned in the form, fed only on owner + relevance like any roll-up entry.
 ### 6.7 Lorebook
 
 The world's `lorebook`: a setting bible as small canon entries `{title, type, activation, keywords[],
-content}`.
+content}` plus optional World Info fields (`order`, `probability`, `selective` + `secondary`, `useRegex`,
+`role` + `depth`) — see the advanced bullets below.
 
 - **`type`** ← a fixed vocabulary (`LORE_TYPES`, `scripts/lorebook.js`): premise, world, location,
   character, faction, religion, magic, law, culture, history, event, item, creature, lore, other
@@ -1113,6 +1114,32 @@ content}`.
   enough.
 - **`content`** — canon facts; the GM treats them as ground truth (in-game divergence is recorded in
   memory).
+
+- **Advanced World Info fields (all optional).** These are native engine equivalents of SillyTavern's
+  World Info switches, not importer-only metadata:
+  - **`order`** (integer, default `0`) — higher wins ties in relevance ranking and orders entries
+    inserted at the same transcript boundary. It is a priority tiebreak, not a hard include: a
+    low-order entry still fires when it is the only match.
+  - **`probability`** (0–100, default `100`) — per-turn chance. `0` never fires, `100` always does;
+    in between the roll is deterministic for the adventure id + turn (`hash32(seed|turn|title)`), so
+    refits or prompt rebuilds cannot silently swap canon mid-turn. Dedicated profile calls pass
+    `applyProbability: false` and see every entry.
+  - **`selective`** with **`secondary`** — a hard AND gate: the entry needs one primary keyword and
+    one secondary keyword in the same scene. Each list is OR, the lists are AND. Only meaningful
+    for `activation: "keywords"`; with no secondary keys it normalizes to an ordinary entry.
+  - **`useRegex`** (`use_regex` is accepted on import) — primary and secondary keys are JavaScript
+    regex patterns, case-insensitive, with alternation preserved. An invalid pattern falls back to
+    literal matching for that key instead of throwing. Keywords are split one-per-line/chip, not on
+    `|` or `{}`.
+  - **`role` + `depth`** — at-depth insertion. `role` is `system`, `user` or `assistant` (0/1/2 are
+    accepted on import); `depth` counts story messages back from the newest (`0` = after the newest
+    message, `2` = before the second-newest), clamped at the start of the transcript. Both are
+    required together; a bare role or depth leaves the entry in `WORLD LORE`. The engine assembles
+    one text prompt, so the role is a visible `[SYSTEM/USER/ASSISTANT LORE]` label rather than a
+    chat-message role. With no transcript yet (opening turn) positioned entries are emitted in one
+    `WORLD LORE — AT-DEPTH INSERTIONS` section, priority order.
+  - Position `4` is the only World Info position imported as `role` + `depth`; positions 0–3 stay
+    standing lore in `WORLD LORE`, which is already how the engine uses them.
 
 `scripts/lorebook.js` also provides normalization (`normalizeLorebook`/`normalizeLoreEntry`), keyword
 splitting/matching (word-boundary, case-insensitive), `lorebookToText` for one-shot consumers, and

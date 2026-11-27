@@ -1,5 +1,5 @@
 // MNO RPG ENGINE — main app. Boots the UI, drives the chat loop, sessions, memory, and panels.
-import { SessionStore, HeroStore, exportState, parseImported, SAVE_EXTENSION } from "./storage.js";
+import { SessionStore, HeroStore, exportState, parseImported, SAVE_EXTENSION, MAX_SAVED_HEROES } from "./storage.js";
 import { MemorySystem, MEMORY_EVERY_TURNS, MANUAL_ENABLED_CAP, manualEnabledCount, normalizeMemories, ownerLabel } from "./memory-system.js";
 // [rpge-patch 009] layered narrative history: cadence tick, rewind invalidation, panel stats +
 // backlog build. See memory-history.js + PATCHES.md.
@@ -113,16 +113,35 @@ setAnnouncementActionHandler((act) => {
 // wrapper's game overlay — the wrapper and the app share an origin). "imports" mounts the
 // Import page; "settings/<section>" opens the Settings popup on that section. Works from the
 // chat too: the landing is re-entered first (the session stays standing behind it).
-window.addEventListener("message", (e) => {
-  const d = e && e.data;
-  if (!d || d.rpgeOpen !== true) return;
-  const t = String(d.target || "");
+let appBooted = false;
+let pendingDeepLink = null;
+function applyDeepLink(t, seq) {
   const open = async () => {
-    if ($("landing") && $("landing").hidden) { try { await goToLanding({ keepSession: true }); } catch (err) {} }
+    const landing = document.getElementById("landing");
+    if (landing && landing.hidden) { try { await goToLanding({ keepSession: true }); } catch (err) {} }
     if (t === "imports") { await setHomePage("imports", { push: true }); return; }
     if (t === "settings" || t.startsWith("settings/")) { openSettingsPanel(t === "settings" ? null : t.slice(9)); return; }
   };
-  open().catch((err) => console.warn("[rpge] deep link failed:", err));
+  return open().catch((err) => console.warn("[rpge] deep link failed:", err)).finally(() => {
+    // Acknowledge so the wrapper stops retrying. The click may arrive while this frame is
+    // navigating; without the ack the wrapper cannot tell "handled" from "posted into the void".
+    try {
+      if (window.parent && window.parent !== window) window.parent.postMessage({ rpgeOpenAck: seq, docOrigin: performance.timeOrigin }, window.location.origin);
+    } catch (err) { /* not embedded */ }
+  });
+}
+window.addEventListener("message", (e) => {
+  // Only the wrapper that owns this iframe may steer it. Without this, any window holding a
+  // reference (a popup, an embedded ad) could yank the player to settings mid-turn.
+  if (e.source !== window.parent || e.origin !== window.location.origin) return;
+  const d = e && e.data;
+  if (!d || d.rpgeOpen !== true) return;
+  const t = String(d.target || "");
+  const seq = d.seq;
+  // This listener exists before init() has mounted the shells. Acting now would throw (and the
+  // ack would still clear the wrapper's retry, losing the link), so keep the newest one for boot.
+  if (!appBooted) { pendingDeepLink = { target: t, seq: seq }; return; }
+  applyDeepLink(t, seq);
 });
 
 const $ = (id) => document.getElementById(id);
@@ -665,6 +684,18 @@ async function init() {
     if (activeId) { try { await store.setActive(null); } catch (e) {} }
     await renderLanding(sessions);
   }
+  // Tell the Loreweaver wrapper that the deep-link listener is live. It queues "imports" or
+  // "settings/..." clicks that land while the ~90 modules are still booting, and flushes the
+  // latest one here instead of dropping it (the old fixed 100 ms post was a coin flip).
+  try {
+    appBooted = true;
+  if (window.parent && window.parent !== window) window.parent.postMessage({ rpgeReady: true }, window.location.origin);
+  if (pendingDeepLink) {
+    const p = pendingDeepLink;
+    pendingDeepLink = null;
+    applyDeepLink(p.target, p.seq);
+  }
+  } catch (e) { /* not embedded */ }
 }
 
 // Bring the author line of the worlds that are OURS in step with this device's community identity.
@@ -11023,6 +11054,7 @@ async function promptSaveHero(c) {
     await heroStore.save(bioFromChar(c), lab, existing ? existing.id : undefined);
   } catch (e) {
     if (isStorageError(e) || (e && e.isStorageUnavailable)) { notifyStorageError(notify, "saving", e); return false; }
+    if (e && e.code === "hero-limit") { notify("📂 " + (e.message || "The saved-hero library is full."), { ms: 6500 }); return false; }
     notify("✖ Couldn't save that hero: " + (e.message || e), { ms: 5200 });
     return false;
   }
@@ -11055,7 +11087,7 @@ function openSavedHeroesPopup() {
     const countEl = overlay.querySelector("#shCount");
     const renderList = async () => {
       const list = await heroStore.list();
-      countEl.textContent = list.length ? `${list.length} saved` : "";
+      countEl.textContent = list.length ? `${list.length} / ${MAX_SAVED_HEROES} saved` : `0 / ${MAX_SAVED_HEROES} saved`;
       if (!list.length) {
         listEl.innerHTML = `<div class="sh-empty">No saved heroes yet.<br><span class="dim">Save one from the hero wizard — bio and avatar are kept here, shared across all worlds (stats stay per-world).</span></div>`;
         return;

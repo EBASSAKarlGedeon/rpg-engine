@@ -157,7 +157,7 @@ export class SessionStore {
 // Global hero library — bio + avatar only. Stats are per-world, so they're deliberately NOT
 // stored here. Lives in the generator's kv "rpg" folder, so it's shared across all worlds and
 // sessions (not bound to any world).
-const MAX_SAVED_HEROES = 40;
+export const MAX_SAVED_HEROES = 40;
 
 export class HeroStore {
   constructor(kv) {
@@ -201,8 +201,17 @@ export class HeroStore {
     };
     const idx = list.findIndex((h) => h.id === rec.id);
     if (idx >= 0) list[idx] = rec;
-    else list.push(rec);
-    while (list.length > MAX_SAVED_HEROES) list.shift();
+    else {
+      // A full library used to evict the OLDEST hero silently (shift) while still toasting
+      // "saved". Refuse instead: the caller can name the cap and let the user delete a slot.
+      if (list.length >= MAX_SAVED_HEROES) {
+        const err = new Error("The saved-hero library is full (" + MAX_SAVED_HEROES + "). Delete a slot in Saved Heroes first - nothing was overwritten.");
+        err.code = "hero-limit";
+        err.limit = MAX_SAVED_HEROES;
+        throw err;
+      }
+      list.push(rec);
+    }
     try {
       await withStorageRetry(() => this.rpg.set("savedHeroes", list), { retries: 1 });
     } catch (e) {

@@ -21,7 +21,7 @@ import { renderContextTab } from "./context-budget.js";
 import { imageGuidance } from "./image-gen-prefs.js";
 import { utf8ByteLen } from "./popups.js";
 import {
-  normalizeLorebook, normalizeLoreEntry, splitKeywords, lorebookTitleList, lorebookToText,
+  normalizeLorebook, normalizeLoreEntry, splitKeywords, splitRegexKeywords, lorebookTitleList, lorebookToText,
   keywordLoreForText, LORE_TYPES, LORE_FORMAT, LORE_EXTENSION
 } from "./lorebook.js";
 import { NPC_NAME_BANNED } from "./banned-words.js";
@@ -2340,7 +2340,7 @@ function renderCover(v) {
 
   /* ---------- Lorebook ---------- */
   // Each entry is { title, type, activation ("always"|"keywords"), keywords[], content }.
-  const emptyLoreEntry = () => ({ title: "", type: "lore", activation: "keywords", keywords: [], content: "" });
+  const emptyLoreEntry = () => ({ title: "", type: "lore", activation: "keywords", keywords: [], content: "", order: 0, probability: 100, selective: false, secondary: [], useRegex: false, role: "", depth: null });
   const loreSplit = createSplit("lorebook", "lore");
   function renderLorebook() {
     const v = $v("lorebook");
@@ -2394,7 +2394,11 @@ function renderCover(v) {
       siMeta(
         siBadge(type, "acc"),
         siBadge(keywords ? "triggered" : "always", keywords ? "" : "al"),
-        keywords && nKw ? siBadge(nKw + (nKw === 1 ? " word" : " words")) : ""
+        keywords && nKw ? siBadge(nKw + (nKw === 1 ? " word" : " words")) : "",
+        e.selective ? siBadge("AND") : "",
+        e.useRegex ? siBadge("regex") : "",
+        e.probability !== undefined && Number(e.probability) < 100 ? siBadge(Number(e.probability) + "%") : "",
+        e.role ? siBadge(e.role + " @" + (e.depth ?? 4)) : ""
       );
   };
   // A per-type class on each row, so every lore type carries its own colour (see styles.css's lt-*
@@ -2417,6 +2421,25 @@ function renderCover(v) {
           <div class="ce-kw-chips" data-kw-chips="${i}"></div>
         </div>
       </div>
+      <details class="ce-lore-adv"${e.order || e.probability !== 100 || e.useRegex || e.selective || e.role ? " open" : ""}>
+        <summary>Advanced — priority, chance &amp; insertion</summary>
+        <div class="ce-grid ce-lore-grid">
+          <label class="ce-fld"><span>${infoTipLabelHtml("priority", "Higher priority wins ties against another relevant entry, and higher-priority insertions land first at the same depth.")}</span><input data-f="order" type="number" step="1" value="${esc(e.order ?? 0)}"></label>
+          <label class="ce-fld"><span>${infoTipLabelHtml("chance", "Percent chance the entry is fed on a given turn. 100 = always; 0 = never. The roll is stable within a turn, so rebuilding the prompt cannot swap lore.")}</span><input data-f="probability" type="number" min="0" max="100" step="1" value="${esc(e.probability ?? 100)}"></label>
+        </div>
+        <label class="ce-lore-check"><input type="checkbox" data-f="useRegex"${e.useRegex ? " checked" : ""}> Regex triggers (each key is a regular expression)</label>
+        <label class="ce-lore-check"><input type="checkbox" data-f="selective"${e.selective ? " checked" : ""}> Requires a secondary trigger too (AND)</label>
+        <label class="ce-fld ce-lore-secondary"><span>${infoTipLabelHtml("secondary triggers", "Only used with AND above. Any one of these must also appear, in addition to any primary trigger.")}</span><input data-f="secondary" value="${esc((e.secondary || []).join(e.useRegex ? "\n" : ", "))}" placeholder="${e.useRegex ? "one regex per line" : "comma-separated words"}"></label>
+        <div class="ce-grid ce-lore-grid">
+          <label class="ce-fld"><span>${infoTipLabelHtml("insertion", "standard keeps the entry in WORLD LORE. system/user/assistant inserts it at a message boundary instead, labeled with that role.")}</span><select data-f="role">
+            <option value=""${e.role ? "" : " selected"}>standard (world lore)</option>
+            <option value="system"${e.role === "system" ? " selected" : ""}>system</option>
+            <option value="user"${e.role === "user" ? " selected" : ""}>user</option>
+            <option value="assistant"${e.role === "assistant" ? " selected" : ""}>assistant</option>
+          </select></label>
+          <label class="ce-fld ce-lore-depth"${e.role ? "" : " hidden"}><span>${infoTipLabelHtml("depth", "Messages back from the newest one: 0 inserts after it, 4 inserts before the fourth-newest. Only used when an insertion role is chosen.")}</span><input data-f="depth" type="number" min="0" max="999" step="1" value="${esc(e.depth ?? 4)}"></label>
+        </div>
+      </details>
       <label class="ce-fld ce-lore-content"><span>${infoTipLabelHtml("content", "The canon facts the GM must know.")}</span><textarea data-f="content" rows="10" placeholder="What is canon about this entry — facts, rules, descriptions…">${esc(e.content)}</textarea></label>`;
   }
   // Wire the selected entry's controls. Field edits mutate in place and repaint the matching left
@@ -2429,12 +2452,25 @@ function renderCover(v) {
         if (f === "activation") e.activation = inp.value;
         else if (f === "title") e.title = inp.value;
         else if (f === "type") e.type = inp.value.toLowerCase();
+        else if (f === "order") e.order = Number.isFinite(Number(inp.value)) ? Math.trunc(Number(inp.value)) : 0;
+        else if (f === "probability") e.probability = Math.max(0, Math.min(100, Number(inp.value) || 0));
+        else if (f === "depth") e.depth = inp.value === "" ? null : Math.max(0, Math.min(999, Math.trunc(Number(inp.value) || 0)));
+        else if (f === "role") {
+          e.role = inp.value;
+          if (!e.role) e.depth = null;
+          else if (e.depth === null || e.depth === undefined) e.depth = 4;
+          const depthEl = editEl.querySelector(".ce-lore-depth");
+          if (depthEl) { depthEl.hidden = !e.role; const di = depthEl.querySelector("input"); if (di) di.value = String(e.depth ?? 4); }
+        }
+        else if (f === "useRegex") e.useRegex = !!inp.checked;
+        else if (f === "selective") e.selective = !!inp.checked;
+        else if (f === "secondary") e.secondary = e.useRegex ? splitRegexKeywords(inp.value) : splitKeywords(inp.value);
         else e.content = inp.value;
         markTouched();
         if (f === "activation") editEl.querySelector(".ce-lore-kw").hidden = inp.value !== "keywords";
         loreSplit.paintRow(sel);
       };
-      if (inp.tagName === "SELECT") inp.onchange = inp.oninput;
+      if (inp.tagName === "SELECT" || inp.type === "checkbox") inp.onchange = inp.oninput;
     });
     // The trigger-word chips: built in JS so the input keeps focus while adding/removing words
     // (no full re-render on every commit).
@@ -2442,7 +2478,9 @@ function renderCover(v) {
     const entry = () => M.lorebook[sel];
     const box = createChipInput({
       list: () => (entry() && entry().keywords) || [],
-      split: splitKeywords, // the field takes a comma-separated paste
+      // Literal mode accepts a comma/pipe/semicolon paste; regex mode must preserve | and
+      // quantifier commas, so it takes one pattern per line.
+      split: (v) => (entry() && entry().useRegex ? splitRegexKeywords(v) : splitKeywords(v)),
       placeholder: "type a trigger word, Enter to add",
       removeTitle: "Remove trigger word",
       commit: (k) => { if (!entry()) return false; entry().keywords.push(k); return true; },
